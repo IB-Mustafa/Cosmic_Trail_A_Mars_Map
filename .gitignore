@@ -1,0 +1,23 @@
+DEMO_SCRIPT.md
+
+# Data lives on Hugging Face (irhabatool/cosmic-trail-data) — too large for Git.
+# See README "Quick Start" for the download command.
+/data/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Frontend (also in frontend/.gitignore)
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

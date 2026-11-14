@@ -1,0 +1,38 @@
+MIT License
+
+Copyright (c) 2026 Team CosmicGirls
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+Third-party components:
+
+OpenLayers 10.11.0
+Copyright 2005-present, OpenLayers Contributors
+License: BSD-2-Clause (see frontend/static/ol/LICENSE.md)
+Source: https://github.com/openlayers/openlayers
+
+---
+
+NASA/USGS Data:
+HiRISE data products are produced by the HiRISE team at the University of
+Arizona and provided by NASA/JPL. MOLA data is provided by NASA/JPL/GSFC.
+These data products are in the public domain. Suggested credit:
+"NASA/JPL/University of Arizona" (HiRISE) and "NASA/JPL/GSFC" (MOLA).
