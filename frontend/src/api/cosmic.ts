@@ -20,10 +20,6 @@ export interface Dataset {
   coverage_fraction: number
   grid: Grid | null
   crs: Crs | null
-  fill_overlay: boolean
-  fill_source: string | null
-  fill_label: string
-  fill_fraction: number
 }
 
 export interface RouteResult {

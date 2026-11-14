@@ -406,6 +406,21 @@ def test_route_no_path_through_wall():
     assert exc_info.value.code == "no_feasible_route"
 
 
+def test_blocked_start_snaps_to_destination_component():
+    """A tied nearest start snap should use the passable cell connected to the destination."""
+    ds, _ = _make_synthetic_ds(n=20, cell=5.0)
+    g = ds.grid
+    ds.slope[:, 10] = 89.0
+    start = g.xy(10, 10)
+    destination = g.xy(10, 15)
+
+    route = plan_route(ds, start, destination, "shortest", RouteParams())
+
+    assert route["cell_path"][0] == [10, 11]
+    assert route["cell_path"][-1] == [10, 15]
+    assert all(c > 10 for _, c in route["cell_path"])
+
+
 def test_route_too_steep_blocked():
     """When all cells exceed max_slope_deg, start is immediately blocked."""
     ds, _ = _make_synthetic_ds(n=15, cell=5.0)
