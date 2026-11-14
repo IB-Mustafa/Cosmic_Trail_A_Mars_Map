@@ -39,7 +39,6 @@ function LayerItem({ id, label, on, onClick, children, disabled, title }: {
 
 export default function LayerControls() {
   const l = useLayerStore()
-  const dataset = useRouteStore(s => s.dataset)
   const georef = useRouteStore(s => s.georef)
   const terrain = useRouteStore(s => s.terrain)
   const ortho = useRouteStore(s => s.ortho)
@@ -55,7 +54,6 @@ export default function LayerControls() {
     ? minerals.points.filter(p => p.lon >= georef.west && p.lon <= georef.east && p.lat >= georef.south && p.lat <= georef.north).length
     : null
   const has3d = !!terrain?.available
-  const fillPct = ((dataset?.fill_fraction ?? 0) * 100).toFixed(1)
 
   return (
     <section className="glass panel" data-occludes>
@@ -69,12 +67,6 @@ export default function LayerControls() {
                   + (ortho!.sources?.length ? '\n' + ortho!.sources.join('\n') : '')
                 : ortho?.note ?? 'HiRISE photo mosaic not available from the backend'}>
           📷 HiRISE photo
-        </LayerItem>
-        <LayerItem id="gapFill" label="Gap fill" on={l.showGapFill} onClick={l.toggleGapFill} disabled={!dataset?.fill_overlay}
-              title={dataset?.fill_overlay
-                ? `Blue hatching = HiRISE gaps filled from ${dataset.fill_label} (${fillPct}% of area)`
-                : 'No gap fill in this dataset'}>
-          Gap fill {dataset?.fill_overlay && <small>{fillPct}%</small>}
         </LayerItem>
         <LayerItem id="footprint" label="Routable area" on={l.showFootprint} onClick={l.toggleFootprint} disabled={!georef}
               title="Dashed outline of the area the router covers (always shown while picking A/B)">

@@ -373,7 +373,6 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
 
   // ---------- HiRISE overlays (draped) ----------
   const hiriseUrl = dataset ? layerUrl(dataset.id, layers.hiriseStyle) : null
-  const fillUrl = dataset?.fill_overlay ? layerUrl(dataset.id, 'fill_overlay') : null
 
   // ---------- place names ----------
   // Science-site names already have their own pins; Gale has its clickable marker.
@@ -522,9 +521,8 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
           <ScreenSpaceEvent action={onClick as never} type={ScreenSpaceEventType.LEFT_CLICK} />
         </ScreenSpaceEventHandler>
 
-        {/* HiRISE layer under the gap-fill hatching (zIndex), both draped on the terrain. */}
+        {/* HiRISE terrain draped on the terrain surface. */}
         <Overlay name="HiRISE terrain" url={hiriseUrl} rect={rect} show={layers.showHiRISE} zIndex={0} opacity={op.hirise} />
-        <Overlay name="Gap-fill areas" url={fillUrl} rect={rect} show={layers.showGapFill} zIndex={1} opacity={op.gapFill} />
 
         {/* Routable footprint = the analysis grid (every cell has elevation; only the outer
             1-cell border lacks slope). Tinted while picking A/B. */}
