@@ -164,6 +164,24 @@ waypoint in the GeoJSON with a position measured from a cited NASA/JPL or USGS p
 | Source URL | Same directory as the DTM above |
 | Use | Background context layer (not currently loaded in prototype; planned) |
 
+### HiRISE photo layer — `data/hirise_gale/ortho_mosaic*.tif`
+
+Built by `scripts/build_ortho_mosaic.py` from the orthoimages that accompany the five HiRISE DTM
+pairs over the study window (`https://www.uahirise.org/PDS/DTM/…`, NASA/JPL-Caltech/UArizona).
+Served as a 256 px tile pyramid (`app/ortho_tiles.py`) down to the mosaic's native resolution.
+
+| Mosaic | Source product | Download | Mosaic size | Status |
+|--------|----------------|----------|-------------|--------|
+| `ortho_mosaic.tif` (1 m/px) | `*_RED_C_01_ORTHO.JP2` (1.01 m/px) | ~178 MB | 144 MB | default, distributed |
+| `ortho_mosaic_50cm.tif` (0.5 m/px) | `*_RED_A_01_ORTHO.JP2` (0.25 m/px, box-averaged to 0.5 m) | ~2.23 GB | ~0.6–0.8 GB (est.) | optional: `prepare_data.py --ortho-res 0.5` |
+| `ortho_mosaic_25cm.tif` (0.25 m/px) | `*_RED_A_01_ORTHO.JP2` (native) | ~2.23 GB | ~2–3 GB (est.) | optional: `--ortho-res 0.25` |
+
+The backend serves the sharpest mosaic present; where a finer mosaic has no data (for example a
+partial download) tiles are filled from the 1 m mosaic. Every mosaic is lossless (DEFLATE), and the
+pixels are only resampled (box average when making pixels coarser), never sharpened or upscaled. The
+same fixed tone curve (half histogram equalisation, `app/ortho_tiles.py`) is applied to every
+tile for legibility, because raw HiRISE RED values sit in a narrow band.
+
 ### Context: MOLA Global Topography
 
 | Field | Value |
