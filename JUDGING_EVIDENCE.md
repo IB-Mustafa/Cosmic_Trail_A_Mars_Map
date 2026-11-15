@@ -1,345 +1,163 @@
-COSMIC TRAIL --- Judging Evidence (Updated Project Audit)
-Purpose: This document separates data that is documented as
-originating from NASA/USGS products, data that is generated or derived
-by the project, approximate/demo content, and information fetched
-remotely at runtime.
+COSMIC TRAIL — Data Verification, Sources & Runtime Evidence
+Purpose: This document explains which data/resources the project uses, where the project says they come from, what was checked in the supplied project files, and which parts are static, remote, derived, approximate, or calculated at runtime.
 
-Audit basis: The project ZIP supplied for review, especially
-data/hirise_gale/metadata.json, data/synthetic_demo/metadata.json,
-DATA_SOURCES.md, data/README.md, the application source tree, and
-the test results reported by the project developer. This is a
-code-and-metadata audit, not an independent re-download or scientific
-validation of every upstream product.
-1. Data provenance: what is real, derived, approximate, or synthetic?
-1.1 Main routing terrain: real-source data with a documented gap-fill
-The active Gale Crater terrain dataset is identified in
-data/hirise_gale/metadata.json as kind: real_hirise.
+1. Verification scope — what “verified” means here
+This review inspected the supplied project archive and its source files, including dataset metadata, data-source documentation, application code, and frontend implementation.
 
-The metadata records five merged HiRISE DTM tiles:
+Verified within the project: file presence, metadata fields, declared source/product names, dataset dimensions and coverage figures recorded in metadata, code paths that load data, and whether a feature is local, remote, static, or calculated.
+
+Not independently authenticated: original upstream NASA/USGS downloads were not re-downloaded and compared against official archives as part of this review. Therefore, source attribution below means documented by the project, not independently certified by this audit. SHA-256 checksums verify file consistency against the checksum record; they do not independently prove source ownership or scientific accuracy.
+2. Data inventory and source evidence
+2.1 Main Gale Crater terrain — HiRISE DTM with USGS gap-fill
+Project files: data/hirise_gale/metadata.json, data/hirise_gale/analysis.npz, and scripts/prepare_data.py.
+
+The metadata identifies the active dataset as kind: real_hirise and records five merged HiRISE DTM tile products:
 - DTEEC_018854_1755_018920_1755_U01.IMG
 - DTEEC_023957_1755_024023_1755_U01.IMG
 - DTEEC_009505_1755_009571_009571_U01.IMG
 - DTEEC_010573_1755_010639_010639_U01.IMG
 - DTEEC_040770_1755_039280_1755_U01.IMG
-The actual file names in the metadata are authoritative; check the
-product IDs against their source pages before external publication. The
-metadata also lists two candidate tiles skipped because they had no
-valid data inside the study window.
+The metadata also records two candidate tiles skipped because they had no valid data inside the study window.
+Metadata measurement	Recorded value
+Study bounds	137.35–137.55°E, 4.75–4.45°S
+Analysis grid resolution	5 m
+Grid dimensions	2,364 × 3,558 cells
+Total cells	8,411,112
+Valid cells	8,399,272
+Valid coverage	99.86%
+HiRISE-sourced cells	7,417,993 (88.19%)
+USGS DEM-filled cells	993,119 (11.81%)
+MOLA-filled cells	0 (0%)
+95th-percentile slope	18.81°
 
-Grid facts recorded in metadata:
 
-  Measure                                        Recorded value
-  Study window                   137.35--137.55°E, 4.75--4.45°S
-Grid resolution                                           5 m
-Grid dimensions                           2,364 × 3,558 cells
-Total cells                                         8,411,112
-Valid cells                                         8,399,272
-Valid coverage                                         99.86%
-Cells sourced from HiRISE                  7,417,993 (88.19%)
-Cells filled from USGS DEM                   993,119 (11.81%)
-Cells filled from MOLA                                 0 (0%)
-95th-percentile slope                                  18.81°
+Important: the routing grid is not 100% HiRISE. Metadata says 88.19% of cells come from merged HiRISE tiles and 11.81% are filled using the USGS MSL Gale merged DEM 1 m v3. The USGS source is described in project metadata as a HiRISE + CTX + HRSC blend tied to MOLA, resampled from 1 m to 5 m and edge-blended with the HiRISE surface. The fill mask is stored in analysis.npz as usgs_filled.
 
-Important distinction: the routing grid is not 100% HiRISE.
-According to the dataset metadata, 88.19% of its cells are from the
-merged HiRISE tiles and 11.81% are filled from the USGS MSL Gale Merged
-DEM 1 m v3. The fill mask is recorded as usgs_filled in
-analysis.npz. The USGS source is described as a HiRISE + CTX + HRSC
-blend tied to MOLA, resampled from 1 m to 5 m and edge-blended to the
-HiRISE surface.
+This is a processed product, not untouched instrument output. The project pipeline performs merging, clipping, reprojection/resampling, slope calculation, and gap filling.
+2.2 HiRISE orthophoto mosaic
+Project file: data/hirise_gale/metadata.json.
 
-This is a processed/derived dataset, not untouched raw instrument
-output. The project processing notes describe merging, clipping,
-resampling, reprojection, slope calculation, and gap filling.
-1.2 HiRISE photo mosaic
-data/hirise_gale/metadata.json records an available ortho_mosaic.tif
-assembled from five HiRISE RED orthoimage products.
+The metadata records an ortho_mosaic.tif assembled from five HiRISE RED orthoimage products.
+Metadata measurement	Recorded value
+Pixel resolution	1 m
+Coverage fraction	88.17%
+Source images missing	None listed
 
-  Measure                                   Recorded value
-  Pixel resolution                                     1 m
-Study bounds              137.35--137.55°E, 4.75--4.45°S
-Coverage fraction                                 88.17%
-Missing source images                        None listed
 
-The metadata says the source images were merged, histogram-matched, and
-clipped; the first source wins in overlaps. This is a derived mosaic.
-The coverage value means it does not cover every cell in the study
-window.
-1.3 Synthetic demonstration terrain
-data/synthetic_demo/metadata.json identifies this dataset as
-kind: synthetic_demo and explicitly states that it is mathematically
-generated and does not represent actual Mars topography or NASA
-measurements.
+The mosaic is derived: metadata describes merging, histogram matching, and clipping, with the first source taking precedence in overlaps. It does not cover the entire study window.
+2.3 Global Mars elevation/context
+Project resource: data/terrain_context.npz and the globe's terrain-loading code.
 
-Its metadata records: - fixed random seed: 42; - grid: 2,000 × 2,000
-cells at 5 m; - 99.62% valid coverage; - elevation base and procedural
-terrain statistics for demonstration.
+The project describes the broader terrain context as MOLA-derived. Treat this as a bundled, processed context grid; it is distinct from the higher-resolution 5 m local Gale routing grid. The frontend terrain code documents HiRISE/USGS heights in the routing region and MOLA context elsewhere.
+2.4 Global Mars imagery basemaps — remote NASA Mars Trek tiles
+Implementation: frontend/src/components/Globe.tsx.
 
-Use: demonstration/testing only. It must not be described as
-measured Mars terrain or used as scientific/operational evidence.
-1.4 Other bundled layers and their certainty
-  Layer/resource          What the project uses                     Evidence status /
-caveat
-  Mineral detections      data/minerals/aqueous_minerals.json     Bundled detection-site
-points attributed in
-project documentation
-to Ehlmann & Edwards
-(2014), using
-CRISM/OMEGA/THEMIS
-context. These are
-points/sites, not a
-continuous mineral map.
+The globe defines remote tile services from NASA Mars Trek:
+- Viking MDIM 2.1 colour mosaic — documented in code as approximately 232 m/pixel.
+- MGS MOLA colour-shaded relief — documented in code as approximately 463 m/pixel for the whole-Mars view.
+These are fetched as WMTS/tile imagery while the application runs and require an internet connection. They are not bundled offline imagery. Code comments say the globe falls back to a plain base colour if remote imagery is unavailable; local application layers can still be used.
+2.5 Mineral detection locations
+Project file: data/minerals/aqueous_minerals.json.
 
-  Geologic units          data/usgs_geologic_units.geojson        Project documentation
-attributes the context
-to Tanaka et
-al. (2014), USGS SIM
-3292. Polygons are
-explicitly described as
-simplified rectangles,
-not boundaries
-digitized from the
-original map. One unit
-assignment is marked
-unverified in
-DATA_SOURCES.md.
+Project documentation attributes these mineral detection/site points to Ehlmann & Edwards (2014), using CRISM/OMEGA/THEMIS instrument context. These are site/detection points, not a continuous mineral abundance map and not a live instrument feed. Their display is based on bundled JSON data.
+2.6 Geologic units
+Project file: data/usgs_geologic_units.geojson.
 
-  Curiosity proposed path data/curiosity_official_route.geojson   Six named waypoints are
-used as a reference
-overlay. Project
-documentation says only
-Bradbury Landing has a
-published coordinate;
-the other waypoint
-positions are
-approximate and are not
-rover traverse
-telemetry.
+Project documentation attributes the geological context to Tanaka et al. (2014), USGS Scientific Investigations Map 3292.
 
-  Hazard zones / dunes    data/hazard_zones.geojson               Approximate context
-outlines. The Bagnold
-Dunes boundary is
-documented as
-indicative, not a
-surveyed boundary.
+Caveat: the supplied project represents the units using simplified rectangle geometries. Do not present these as precise, fully digitized geological boundaries.
+2.7 Curiosity route and landing-site references
+The project includes a proposed/reference route with six waypoints. The audit found only Bradbury Landing's coordinate documented as firm; the other waypoint positions are approximate. This is not a rover telemetry track and should not be described as the exact path driven by Curiosity.
 
-  Terrain context         data/terrain_context.npz                Bundled global/context
-elevation resource
-described by project
-documentation as
-MOLA-derived. Treat it
-as a processed context
-grid, not as the 5 m
-local routing terrain.
+Landing-site labels and the place-name gazetteer are bundled reference content, not live location updates.
+2.8 Hazard and dune overlays
+The project includes hazard/dune outline data as bundled local overlays. Their geometry is documented as approximate/indicative, not a surveyed or operationally certified hazard boundary. Treat them as visualization/context, not safety-critical navigation data.
+2.9 Weather and science facts
+Weather implementation: app/weather_facts.py.
+Science content: app/science.py and related bundled content.
 
-  Place names             Frontend bundled gazetteer/labels         Local static reference
-labels; not live
-location updates.
+Weather values are published/historical facts stored in application code. They are not live Mars weather observations and are not a continuously updated REMS/RAD feed. Science cards are curated explanatory content with literature references, not raw live sensor measurements.
+2.10 Synthetic demo terrain
+Project file: data/synthetic_demo/metadata.json.
 
-  Weather facts           app/weather_facts.py                    Published historical
-figures, not live Mars
-weather and not a full
-live REMS/RAD feed.
-Science cards           app/science.py and related content      Curated explanatory
-facts with literature
-references; these are
-authored content based
-on cited publications,
-not raw sensor data.
-2. Remote resources versus local data
-Remote at runtime
-- The globe's colour basemap uses NASA Mars Trek WMTS tiles, with the
-  URL template documented in DATA_SOURCES.md and implemented in
-  frontend/src/components/Globe.tsx.
-- Those tiles require an internet connection. The project
-  documentation says the globe falls back to a plain base colour when
-  tiles are unavailable.
-Bundled/local at runtime
-- Terrain analysis grids and masks.
-- HiRISE photo mosaic.
-- Mineral and hazard GeoJSON/JSON layers.
-- Geologic-unit and Curiosity-route reference overlays.
-- Place-name data and published weather/science facts.
-The route planner, terrain queries, and assistant responses are computed
-from the local application data/code. A result being calculated at
-runtime does not mean the underlying measurement is live or newly
-downloaded.
-Assistant behaviour
-Project documentation and source descriptions identify ARIA / Mission
-Guide as rule-based, not an LLM-backed generative AI. It answers using
-local data and authored rules/facts. Do not describe it as a live AI
-model or a live Mars data feed.
-3. What is verified, what is assumed, and what is calculated?
-Use these labels in presentations and judging explanations:
-  Label                   Meaning                 COSMIC TRAIL examples
-  Source-documented   The project             HiRISE DTM product IDs;
-metadata/docs identify  USGS MSL Gale DEM; HiRISE
-an upstream source and  ortho products.
-product. This audit has
-not independently
-authenticated the
-upstream file.          
+The metadata explicitly labels this dataset kind: synthetic_demo and says it is mathematically generated rather than measured Mars topography. Recorded characteristics include fixed random seed 42, a 2,000 × 2,000 grid at 5 m spacing, and 99.62% valid coverage.
 
-  Processed / derived Project code transforms 5 m routing grid, merged
-source material into a  ortho mosaic, slope
-usable layer.           raster, terrain-context
-grid.
+Use this dataset for demonstration/testing only. It must not be described as real Mars measurements or NASA instrument data.
+3. Static, remote, and dynamic/runtime parts
+“Dynamic” can mean either fetched from a remote service or calculated by the application. These are different behaviours, so they are separated below.
+Project element	Where it comes from	Behaviour in the app
+HiRISE/USGS Gale routing terrain	Bundled local files under data/hirise_gale/	Static input data loaded locally; terrain values/lookups are used at runtime
+HiRISE orthophoto mosaic	Bundled ortho_mosaic.tif	Static local imagery
+MOLA terrain context	Bundled data/terrain_context.npz	Static local context data
+Mineral detections	Bundled JSON	Static local points
+Geologic units	Bundled GeoJSON	Static local overlay
+Curiosity waypoints/route reference	Bundled project data	Static reference geometry; route proposals/calculations are generated by the app
+Hazard/dune outlines	Bundled project data	Static approximate overlays
+Gazetteer/place labels	Bundled frontend data	Static local labels
+Weather facts	app/weather_facts.py	Static published/historical facts; not live weather
+Science cards	app/science.py and related content	Static curated facts
+Viking MDIM 2.1 basemap	NASA Mars Trek tile service	Remote/dynamic fetch; requires internet
+MOLA shaded-relief basemap	NASA Mars Trek tile service	Remote/dynamic fetch; requires internet
+Terrain tiles/API responses	Backend reads local terrain data and serves responses	Runtime delivery/computation, not necessarily a live external feed
+Route path, distance/cost and comparisons	app/routing.py using local terrain/context	Calculated at runtime
+Terrain queries/profile/slope results	app/terrain.py and local terrain inputs	Calculated at runtime
+ARIA / Mission Guide answers	app/assistant.py, app/context.py, local facts/rules	Rule-based runtime responses; not an LLM-backed live Mars AI service
 
-  Gap-filled          A value comes from      11.81% USGS-filled
-another source where    routing-grid cells.
-the primary source had
-no data.                
 
-  Approximate /         The project             Geology rectangles, most
-inferred              documentation itself    Curiosity waypoint
-warns that the geometry coordinates, dune
-or assignment is        outline, flagged geology
-approximate or          assignment.
-unverified.             
+Key distinction: a route or terrain result can be calculated dynamically even though the underlying terrain measurements are static bundled data. A basemap can be remotely fetched while scientific overlays and routing inputs remain local.
+4. Application processing and code locations
+File or directory	Role evidenced by the project
+scripts/prepare_data.py	Prepares/merges terrain data and creates analysis products
+app/terrain.py	Loads terrain data and supports terrain operations
+app/routing.py	Calculates route paths and comparisons
+app/context.py	Supplies local contextual information
+app/assistant.py	Implements rule-based ARIA response logic
+app/weather_facts.py	Stores published/historical weather facts
+frontend/src/components/Globe.tsx	Globe display, terrain provider and remote basemap configuration
+frontend/src/api/cosmic.ts	Frontend API helpers for terrain and feature resources
+data/hirise_gale/metadata.json	Main terrain provenance/coverage/fill/checksum metadata
+data/synthetic_demo/metadata.json	Synthetic dataset declaration and generation metadata
+DATA_SOURCES.md	Project source descriptions
+SCIENTIFIC_LIMITATIONS.md	Scientific/operational limitations
 
-  Synthetic           Generated               data/synthetic_demo/.
-mathematically for
-demonstration, not
-measured on Mars.       
 
-  Static published      A historical/published  ARIA weather figures and
-fact                  value stored in code,   science-card facts.
-not a current
-observation.            
+The project documents a local equidistant cylindrical Mars coordinate frame, Mars radius 3,396,190 m, planetocentric latitude, and east-positive longitude. Terrain metadata records a 5 m analysis grid and a Horn 3×3 slope method.
+5. What can and cannot be claimed
+Supported by the supplied project files
+- The project contains a dataset explicitly labelled real_hirise with five merged HiRISE DTM tile IDs.
+- Its metadata records 5 m grid resolution and the coverage/source percentages listed above.
+- The routing grid includes a documented 11.81% USGS gap-fill component.
+- The project contains a derived HiRISE orthophoto mosaic.
+- The project contains separate MOLA-derived context data and remote NASA Mars Trek basemap definitions.
+- The project includes bundled mineral, geology, route, hazard/dune, gazetteer, weather, and science reference content.
+- The project separately labels its synthetic demo terrain as mathematically generated.
+- Route planning and ARIA responses are implemented in local application code.
+Claims to avoid
+- “Every terrain cell is HiRISE” — incorrect; metadata records 11.81% USGS-filled cells.
+- “All map layers are live NASA data” — incorrect; many layers are bundled static files.
+- “Mars weather is live” — unsupported; weather facts are historical/published values stored in code.
+- “ARIA is a generative AI model connected to NASA” — unsupported; project implementation is rule-based.
+- “The Curiosity line is the exact rover traverse” — unsupported; most waypoint positions are approximate.
+- “Geology/hazard outlines are exact surveyed boundaries” — unsupported; project geometry is simplified/approximate.
+- “The synthetic demo is real Mars terrain” — incorrect.
+- “A checksum proves NASA provenance or scientific accuracy” — incorrect.
+6. Integrity and reproducibility
+The main terrain metadata records SHA-256 checksums for source DTM files and the processed analysis grid; the synthetic dataset also records checksums.
 
-  Remote visual         Fetched from a remote   NASA Mars Trek basemap
-resource              service when the        tiles.
-application runs.       
-Runtime calculation Computed by the app     Route paths, route
-from bundled data and   metrics, terrain lookups,
-algorithms.             rule-based assistant
-responses.
-Do not claim: 100% of the routing grid is HiRISE; all overlays are
-precise; weather is live; Curiosity coordinates are a measured traverse;
-the NASA basemap is offline; or checksums prove NASA provenance.
-4. Data processing and application logic
-The repository documents these relevant implementation locations:
-  File / directory                      Role
-  scripts/prepare_data.py             HiRISE terrain preparation
-pipeline.
+A matching checksum shows that a file matches the checksum value recorded in metadata. It does not independently authenticate the original download, prove NASA/USGS ownership, validate the processing method, or establish scientific accuracy. For formal scientific claims, upstream product pages and original archive files should be checked independently.
+7. Build and test evidence
+The following results were reported by the project developer during this project review:
+Check	Reported result
+npm run build	Successful; Vite reported built in 1.99s
+Frontend bundle	Main minified JS bundle reported as 812.73 kB; Vite issued an advisory warning because it exceeds 500 kB
+python -m pytest -q	116 passed, 75 warnings, in 138.22 seconds
+Browser check	Developer confirmed that the frontend opened in a browser
 
-  app/terrain.py                      Loads terrain data and supports
-terrain operations.
 
-  app/routing.py                      Computes routes and route
-comparisons from terrain inputs.
+The 75 warnings were reported as Starlette/FastAPI deprecation warnings involving asyncio.iscoroutinefunction. These results are developer-reported and were not independently rerun while preparing this document.
 
-  app/context.py                      Supplies local contextual
-information for route/assistant
-responses.
-
-  app/assistant.py                    Rule-based ARIA response logic.
-
-  app/weather_facts.py                Stores published historical weather
-facts.
-
-  frontend/src/components/Globe.tsx   Globe display and remote basemap
-configuration.
-
-  data/hirise_gale/metadata.json      Main dataset provenance, coverage,
-fill-source and checksum metadata.
-
-  data/synthetic_demo/metadata.json   Synthetic dataset declaration and
-generation metadata.
-
-  DATA_SOURCES.md                     Project's source descriptions and
-caveats.
-SCIENTIFIC_LIMITATIONS.md           Scientific and operational
-limitations.
-The project documents a local-equidistant-cylindrical Mars coordinate
-frame with radius 3,396,190 m and planetocentric latitude /
-east-positive longitude conventions. The terrain metadata records a 5 m
-analysis grid and a Horn 3×3 slope method.
-5. Integrity checks and what they do not prove
-The main terrain metadata contains SHA-256 checksums for source DTM
-files and the processed analysis grid. The synthetic dataset also
-contains checksums.
-
-A matching checksum can show that a file has not changed relative to the
-checksum record. It does not, by itself, authenticate the original
-source, prove NASA ownership, validate the scientific processing, or
-establish measurement accuracy. Source-page and product metadata should
-be checked separately.
-6. Test and build evidence
-The developer reported the following results after the current project
-edits:
-  Check                               Result
-  Frontend production build           Successful; Vite reported
-(npm run build)                   built in 1.99s.
-
-  Frontend bundle warning             Main JS bundle 812.73 kB minified,
-above Vite's 500 kB advisory
-threshold. This is a performance
-warning, not a build failure.
-
-  Backend test suite                  116 passed, 75 warnings, 138.22
-(python -m pytest -q)             seconds.
-Browser smoke check                 Developer confirmed the frontend
-opened in the browser.
-The 75 test warnings were reported as deprecation warnings from the
-installed Starlette/FastAPI stack concerning
-asyncio.iscoroutinefunction. They did not cause test failures.
-
-These are developer-reported run results, not independently re-executed
-as part of this document update.
-7. Changes and remaining work
-UI changes reported during this project session
-- Removed the layer opacity slider from the layer control UI.
-- Removed the Gap Fill layer toggle/control from the layer control UI.
-- Removed the 3D exaggeration slider/control from the layer control
-  UI.
-These are UI removals. They do not, by themselves, prove that the
-underlying gap-filling data, processing, or 3D terrain functionality has
-been removed from the backend or data files.
-Known documentation and review items
-- Review DATA_SOURCES.md for stale statements that still describe
-  the project as shipping only a synthetic demo; the supplied ZIP
-  contains a real_hirise dataset as well.
-- Reconcile old product IDs or descriptions in documentation with the
-  current data/hirise_gale/metadata.json. The current metadata lists
-  five merged DTM tiles and two skipped candidates; do not reuse a
-  single older product ID as if it describes the entire merged
-  dataset.
-- Keep the geology, Curiosity waypoint, dune/hazard and
-  historical-weather caveats visible in the UI/demo.
-- Consider splitting the frontend JavaScript bundle; the current build
-  warns that the main minified JS chunk exceeds 500 kB.
-- Backend startup on the developer's Windows machine has not been
-  confirmed in this audit. Passing API tests does not, by itself,
-  prove the local server starts successfully under every Windows
-  security policy.
-8. Suggested judging explanation
-COSMIC TRAIL combines source-documented Mars datasets with clearly
-labelled derived, approximate, and synthetic resources. The local
-routing grid is 5 m resolution and is documented as 88.19%
-HiRISE-derived, with 11.81% of cells gap-filled from the USGS MSL Gale
-merged DEM; valid coverage is 99.86%. The app also includes a derived
-HiRISE ortho mosaic, reference mineral and geology layers, approximate
-contextual overlays, and a separate synthetic demo dataset. Route
-planning and terrain queries are calculated locally from bundled
-inputs. The globe's colour basemap is fetched from NASA Mars Trek when
-internet is available. Published weather values are historical, not
-live. We distinguish source data from processing, estimates, and
-generated demo content rather than presenting every layer as equally
-authoritative.
-
-9. Source files to inspect for supporting evidence
-- data/hirise_gale/metadata.json
-- data/synthetic_demo/metadata.json
-- DATA_SOURCES.md
-- data/README.md
-- SCIENTIFIC_LIMITATIONS.md
-- scripts/prepare_data.py
-- scripts/make_synthetic_demo.py
-- app/terrain.py
-- app/routing.py
-- app/context.py
-- app/assistant.py
-- app/weather_facts.py
-- frontend/src/components/Globe.tsx
-- tests
+Backend startup limitation: a successful local backend server startup on the developer's Windows machine was not confirmed in this review. Passing automated tests does not by itself establish that the server starts under every Windows security policy.
+8. Suggested explanation for judges
+“Cosmic Trail combines a high-resolution Gale Crater terrain dataset documented as being built from HiRISE DTMs, with USGS DEM gap filling where the HiRISE source has missing coverage. The project metadata records a 5 m analysis grid with 99.86% valid coverage: 88.19% HiRISE-sourced and 11.81% USGS-filled. We also use a derived HiRISE orthophoto mosaic, MOLA-derived broader terrain context, and NASA Mars Trek imagery tiles for the global visual basemap. Mineral, geology, Curiosity waypoint, hazard, place-name, weather and science information is included as local reference content, with documented approximations and historical/static limitations. The app calculates route results and terrain queries at runtime from local data; its ARIA guide uses rule-based responses. A separate synthetic dataset is provided for demo/testing and is not presented as measured Mars terrain.”
+9. Review note
+This document is a transparent code-and-metadata audit of the supplied project archive. It distinguishes project-declared sources from independently authenticated source files, and static inputs from remote resources and runtime calculations. If the dataset is used for formal scientific publication or operational decisions, verify the original upstream NASA/USGS products and processing independently.
