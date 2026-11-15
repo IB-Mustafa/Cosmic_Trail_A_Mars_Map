@@ -13,6 +13,11 @@ of Gale Crater (the MSL Curiosity rover landing area). The downloads are large:
                clipped to data/hirise_gale/ortho_mosaic.tif, ~145 MB, by build_ortho_mosaic.py)
   MOLA global  Mars_MGS_MOLA_DEM_mosaic_global_463m.tif   ~2 GB  (clipped)
 
+  Optional, sharper photo layer (--ortho-res 0.5 or 0.25):
+  HiRISE ortho 5 RED_A orthos (0.25 m/px, full resolution)  ~2.23 GB download, built into
+               data/hirise_gale/ortho_mosaic_50cm.tif (~0.6–0.8 GB) or _25cm.tif (~2–3 GB).
+               The 1 m mosaic stays the default; the backend uses the finer one when present.
+
 Multiple HiRISE tiles are merged using a priority-blend approach: where tiles
 overlap the tile with more valid data takes precedence. This can increase
 terrain coverage from ~70% to ~90%+.
@@ -45,7 +50,7 @@ Requires:
     rasterio, numpy, pyproj  (installed in the project venv)
 
 Usage:
-    python scripts/prepare_data.py [--study-window LONMIN LONMAX LATMIN LATMAX]
+    python scripts/prepare_data.py [--study-window LONMIN LONMAX LATMIN LATMAX] [--ortho-res 0.5]
     Default window: 137.35 137.55 -4.75 -4.45  (12 km × 10 km Gale area)
 """
 from __future__ import annotations
@@ -190,6 +195,14 @@ ADDITIONAL_ORTHO_FILES = [
     ("ESP_023957_1755_RED_C_01_ORTHO.JP2", "ESP/ORB_023900_023999/ESP_023957_1755_ESP_024023_1755", 30),
     ("PSP_009505_1755_RED_C_01_ORTHO.JP2", "PSP/ORB_009500_009599/PSP_009505_1755_PSP_009571_1755", 53),
     ("ESP_040770_1755_RED_C_01_ORTHO.JP2", "ESP/ORB_040700_040799/ESP_040770_1755_ESP_039280_1755", 25),  # dunes
+]
+# Full-resolution versions of the same orthos (RED_A, 0.25 m/px), only for --ortho-res < 1.
+HIRES_ORTHO_FILES = [
+    ("ESP_018854_1755_RED_A_01_ORTHO.JP2", "ESP/ORB_018800_018899/ESP_018854_1755_ESP_018920_1755", 401),
+    ("PSP_010573_1755_RED_A_01_ORTHO.JP2", "PSP/ORB_010500_010599/PSP_010573_1755_PSP_010639_1755", 463),
+    ("ESP_023957_1755_RED_A_01_ORTHO.JP2", "ESP/ORB_023900_023999/ESP_023957_1755_ESP_024023_1755", 392),
+    ("PSP_009505_1755_RED_A_01_ORTHO.JP2", "PSP/ORB_009500_009599/PSP_009505_1755_PSP_009571_1755", 678),
+    ("ESP_040770_1755_RED_A_01_ORTHO.JP2", "ESP/ORB_040700_040799/ESP_040770_1755_ESP_039280_1755", 294),
 ]
 
 MANUAL_INSTRUCTIONS = """
@@ -808,6 +821,10 @@ def main():
                         default=[DEFAULT_LONMIN, DEFAULT_LONMAX, DEFAULT_LATMIN, DEFAULT_LATMAX])
     parser.add_argument("--skip-download", action="store_true",
                         help="Use files already in data/raw/ without re-downloading")
+    parser.add_argument("--ortho-res", type=float, choices=[0.25, 0.5], default=None,
+                        help="Also build a sharper HiRISE photo mosaic from the full-resolution RED_A "
+                             "orthos (~2.23 GB download): 0.5 -> ortho_mosaic_50cm.tif (~0.6-0.8 GB), "
+                             "0.25 -> ortho_mosaic_25cm.tif (~2-3 GB). The 1 m mosaic is always built.")
     args = parser.parse_args()
 
     lonmin, lonmax, latmin, latmax = args.study_window
@@ -897,6 +914,39 @@ def main():
         except Exception as exc:
             print(f"  ⚠  Ortho mosaic failed ({exc}); the photo layer will be unavailable.")
             ortho_block = {"available": False, "note": f"Ortho mosaic failed: {exc}"}
+
+    # --- Optional sharper photo mosaic from the full-resolution RED_A orthos ---
+    ortho_hires_block = None
+    if args.ortho_res:
+        hires_files: list[str] = []
+        total_mb = sum(mb for _, _, mb in HIRES_ORTHO_FILES)
+        print(f"\n  Sharper photo layer ({args.ortho_res} m): full-resolution RED_A orthos, "
+              f"~{total_mb / 1000:.2f} GB to download if missing …")
+        for name, folder, size_mb in HIRES_ORTHO_FILES:
+            p = find_file(name)
+            if p is None and not args.skip_download:
+                print(f"  Downloading HiRISE ortho {name} (~{size_mb} MB) …")
+                alt_raw_dir.mkdir(parents=True, exist_ok=True)
+                part = alt_raw_dir / (name + ".part")
+                if try_download(f"{HIRISE_DTM_BASE_URL}{folder}/{name}", part, name):
+                    p = part.replace(alt_raw_dir / name)
+                else:
+                    part.unlink(missing_ok=True)
+            if p is not None:
+                hires_files.append(p.name)
+            else:
+                print(f"  ⚠  {name} not available — the sharper mosaic will have a gap there.")
+        if hires_files:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from build_ortho_mosaic import build as build_ortho_mosaic
+            try:
+                ortho_hires_block = build_ortho_mosaic(
+                    window=(lonmin, lonmax, latmin, latmax), res_m=args.ortho_res, files=hires_files,
+                    update_metadata=False,
+                    out_path=OUT_REAL / f"ortho_mosaic_{round(args.ortho_res * 100)}cm.tif",
+                )
+            except Exception as exc:
+                print(f"  ⚠  Sharper ortho mosaic failed ({exc}); the 1 m mosaic is used.")
 
     # --- Collect every DTM tile available locally ---
     # No tile is hard-coded as primary: the best one is picked below by how
@@ -1149,6 +1199,7 @@ def main():
         },
         # HiRISE photo layer: data/hirise_gale/ortho_mosaic.tif (scripts/build_ortho_mosaic.py).
         "ortho": ortho_block,
+        **({"ortho_hires": ortho_hires_block} if ortho_hires_block else {}),
     }
     (OUT_REAL / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     print(f"\n✓ Done.  Output: {OUT_REAL}/")

@@ -25,6 +25,7 @@ import { SITE_MAX_HEIGHT, useMarsLabels, type PointCategory, type PointLabel, ty
 import { labelOptions, measureLabel } from '../labelStyle'
 import { useMineralPoints, type MineralPick } from './MineralPoints'
 import Inspector from './Inspector'
+import ZoomAids from './ZoomAids'
 import { fitToVisible, measureMapFrame, visibleTangents } from '../mapFrame'
 
 // Terrain: flat until the backend reports 3D height tiles (no Cesium ion, no token).
@@ -351,6 +352,9 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
     // the fallback (FXAA also blurs label text slightly and adds nothing on top of MSAA).
     applyPixelRatio(v)
     v.scene.globe.maximumScreenSpaceError = 1.5
+    // Keep more tiles in memory (Cesium's default is 100) so zooming back out over the photo shows
+    // the already-loaded levels instantly instead of fetching them again.
+    v.scene.globe.tileCacheSize = 300
     if (v.scene.msaaSupported) v.scene.msaaSamples = MSAA_SAMPLES
     else v.scene.postProcessStages.fxaa.enabled = true
     // Pins/labels clamp to the terrain; terrain hides what is behind it.
@@ -831,6 +835,7 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
       </Viewer>
 
       {inspectorSlot && createPortal(<Inspector viewer={viewer} />, inspectorSlot)}
+      <ZoomAids viewer={viewer} ortho={ortho} showOrtho={layers.showOrtho && !!orthoRect} showScale={view === 'study'} />
       {/* Globe tools (top-right) */}
       <div className="globe-tools" data-occludes>
         <div className="view-tabs" role="tablist" aria-label="Map view">
