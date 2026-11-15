@@ -8,6 +8,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -25,6 +27,7 @@ from .db import (
 )
 from .geo import validate_lonlat
 from .routing import RouteError, RouteParams, compare_routes, explain_tradeoff, plan_route
+from .routing import prime as prime_routing, warmup as warmup_routing
 from .science import all_cards, card_by_id, mission_guide_query
 from .terrain import TerrainDataset
 from .assistant import Assistant
@@ -100,6 +103,18 @@ def _load_datasets():
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     _load_datasets()
+    try:  # compile the numba route search now, so the first route request is fast
+        warmup_routing()
+    except Exception as exc:
+        print(f"[COSMIC TRAIL] Route search warm-up failed (routes still work): {exc}")
+
+    def _prime_all():  # per-dataset search tables, built off the startup path
+        for ds_id, ds in list(DATASETS.items()):
+            try:
+                prime_routing(ds)
+            except Exception as exc:
+                print(f"[COSMIC TRAIL] Route tables for {ds_id} not prebuilt: {exc}")
+    threading.Thread(target=_prime_all, name="prime-routing", daemon=True).start()
     if not DATASETS:
         print("[COSMIC TRAIL] No datasets found. Run scripts/make_synthetic_demo.py first.")
     yield
@@ -394,14 +409,29 @@ def api_route(req: RouteRequest):
     end_xy = ds.proj.forward(req.destination.lon, req.destination.lat)
 
     modes = ["shortest", "terrain"] if req.mode == "both" else [req.mode]
+
+    def _one(m: str) -> dict:
+        r = plan_route(ds, start_xy, end_xy, m, p, exclusion=exc_mask)
+        # Science / thermal (dunes) / data-quality notes for the route panel (app/context.py).
+        r["context"] = route_context(ds, r, _minerals_data())
+        return r
+
+    # The two cost models are independent searches; the compiled A* releases the GIL, so
+    # running them on two threads roughly halves the wait for "both".
     results = {}
-    for m in modes:
+    if len(modes) > 1:
+        with ThreadPoolExecutor(max_workers=len(modes)) as pool:
+            futures = {m: pool.submit(_one, m) for m in modes}
+            for m in modes:  # keep the original order; report the first failure as before
+                try:
+                    results[m] = futures[m].result()
+                except RouteError as exc_err:
+                    raise HTTPException(422, exc_err.to_dict())
+    else:
         try:
-            results[m] = plan_route(ds, start_xy, end_xy, m, p, exclusion=exc_mask)
+            results[modes[0]] = _one(modes[0])
         except RouteError as exc_err:
             raise HTTPException(422, exc_err.to_dict())
-        # Science / thermal (dunes) / data-quality notes for the route panel (app/context.py).
-        results[m]["context"] = route_context(ds, results[m], _minerals_data())
 
     response: dict[str, Any] = {
         "dataset_id": ds_id,

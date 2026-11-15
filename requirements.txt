@@ -8,6 +8,7 @@ numpy>=1.26,<3
 rasterio>=1.3,<2
 Pillow>=10,<13
 pyproj>=3.6,<4
+numba>=0.60             # compiles the A* route search (~100x faster); optional, falls back to pure Python
 httpx>=0.27,<1          # optional — only needed to run tests
 pytest>=8,<9            # optional — dev
 pytest-asyncio>=0.23    # optional — dev

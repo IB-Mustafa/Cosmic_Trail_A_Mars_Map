@@ -6,6 +6,7 @@ import Globe from './components/Globe'
 import RoutePanel from './components/RoutePanel'
 import LayerControls from './components/LayerControls'
 import ElevationChart from './components/ElevationChart'
+import ResizablePanel from './components/ResizablePanel'
 import Chatbot from './components/Chatbot'
 
 export default function App() {
@@ -62,7 +63,7 @@ export default function App() {
       {/* Bottom dock: hover-info bar + elevation panel (study view only). */}
       <div className="dock">
         <div id="inspector-slot" className="inspector-slot" />
-        {view === 'study' && <section className="glass bottom" data-occludes><ElevationChart /></section>}
+        {view === 'study' && <ResizablePanel><ElevationChart /></ResizablePanel>}
       </div>
       <Chatbot />
     </div>
