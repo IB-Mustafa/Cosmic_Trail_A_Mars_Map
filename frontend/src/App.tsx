@@ -44,9 +44,9 @@ export default function App() {
 
   return (
     <div className={`app view-${view}`}>
-      {/* Layout regions (App.css grid): sidebar | map, with the hover-info bar and the
-          elevation panel below the map — never on top of it, so the Cesium canvas is exactly
-          the visible map and its camera centres on it. */}
+      {/* Full-bleed map behind floating glass panels. Views are centred in the area the
+          panels leave uncovered (src/mapFrame.ts). */}
+      <div className="globe"><Globe sites={sites} /></div>
       <aside className="sidebar">
         <header className="glass brand" data-occludes>
           <h1>COSMIC TRAIL</h1>
@@ -59,12 +59,12 @@ export default function App() {
         {view === 'study' && <RoutePanel />}
         <LayerControls />
       </aside>
-      <main className="map-area">
-        <div className="globe"><Globe sites={sites} /></div>
-        <Chatbot />
-      </main>
-      <div id="inspector-slot" className="inspector-slot" />
-      {view === 'study' && <section className="glass bottom" data-occludes><ElevationChart /></section>}
+      {/* Bottom dock: hover-info bar + elevation panel (study view only). */}
+      <div className="dock">
+        <div id="inspector-slot" className="inspector-slot" />
+        {view === 'study' && <section className="glass bottom" data-occludes><ElevationChart /></section>}
+      </div>
+      <Chatbot />
     </div>
   )
 }
