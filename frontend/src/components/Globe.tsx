@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Cartesian2, Cartesian3, Cartographic, Color, ConstantProperty, Credit, CustomHeightmapTerrainProvider,
-  Cartesian4, DistanceDisplayCondition, EllipsoidTerrainProvider, GeographicTilingScheme,
-  ClassificationType, HorizontalOrigin, ImageMaterialProperty, Math as CesiumMath, Matrix4, PinBuilder,
+  DistanceDisplayCondition, EllipsoidTerrainProvider, GeographicTilingScheme,
+  ClassificationType, HorizontalOrigin, ImageMaterialProperty, Math as CesiumMath, PinBuilder,
   PolygonHierarchy, PolylineDashMaterialProperty,
-  Rectangle, ScreenSpaceEventType, Transforms, UrlTemplateImageryProvider, VerticalOrigin,
+  Rectangle, ScreenSpaceEventType, UrlTemplateImageryProvider, VerticalOrigin,
   type ImageryLayer, type PerspectiveFrustum, type Viewer as CesiumViewer,
 } from 'cesium'
 import {
@@ -58,14 +59,10 @@ const molaRelief = new UrlTemplateImageryProvider({
   maximumLevel: 7,
   credit: new Credit('Whole Mars relief: MGS MOLA colour shaded relief 463 m (NASA/JPL/GSFC) via NASA Mars Trek'),
 })
-// Whole Mars view: looking straight down at Gale's longitude, 12°N. The globe is placed a
-// little right of and above the canvas centre (fractions of the canvas width / height) so the
-// sidebar and the bottom bar do not cover it. The offset is a sideways camera translation
-// (what camera.moveLeft / moveDown do), never a CSS transform, so picking and hover stay exact.
-const WHOLE_MARS_SHIFT = { right: 0.065, up: 0.09 }
-// Then nudged back down by a fixed 25 CSS px on screen; the globe's size is unchanged.
-const WHOLE_MARS_NUDGE_DOWN_PX = 25
-const WHOLE_MARS_MIN_DIST = 3.4 * MARS_RADIUS   // from Mars' centre: the previous framing (2.4 R up)
+// Whole Mars view: straight down at Gale's longitude, 12°N, just far enough for the whole disc
+// to fit the map area with a 10 % margin. The map is its own layout region (no panels on top),
+// so the globe is simply centred: no sideways camera offset is needed.
+const WHOLE_MARS_MIN_DIST = 3.4 * MARS_RADIUS   // from Mars' centre (2.4 R above the surface)
 
 function wholeMarsCamera(v: CesiumViewer) {
   const canvas = v.scene.canvas
@@ -73,28 +70,10 @@ function wholeMarsCamera(v: CesiumViewer) {
   const fov = (v.camera.frustum as PerspectiveFrustum).fov ?? CesiumMath.PI_OVER_THREE
   // Cesium's fov is the horizontal angle on landscape canvases, the vertical one otherwise.
   const t = Math.tan(fov / 2)
-  const tx = aspect >= 1 ? t : t * aspect
-  const ty = aspect >= 1 ? t / aspect : t
-  const { right, up } = WHOLE_MARS_SHIFT
-  // Back off only as far as needed for the shifted disc to fit (6 % margin):
-  // tan(disc half-angle) = R / sqrt(D² − R²) must stay within the shifted frame.
-  const fit = 0.94 * Math.min(ty * (1 - 2 * up), tx * (1 - 2 * right))
+  const fit = 0.9 * Math.min(aspect >= 1 ? t : t * aspect, aspect >= 1 ? t / aspect : t)
+  // tan(disc half-angle) = R / sqrt(D² − R²) must stay within the frame.
   const dist = Math.max(WHOLE_MARS_MIN_DIST, MARS_RADIUS * Math.sqrt(1 + 1 / (fit * fit)))
-  const centre = Cartesian3.fromDegrees(GALE.lon, 12, 0, MARS)
-  const enu = Transforms.eastNorthUpToFixedFrame(centre, MARS)
-  const col = (i: number) => {
-    const c = Matrix4.getColumn(enu, i, new Cartesian4())
-    return new Cartesian3(c.x, c.y, c.z)
-  }
-  const [east, north, zenith] = [col(0), col(1), col(2)]
-  // Moving the camera left/down by these distances moves the planet right/up on screen.
-  const dx = 2 * right * tx * dist
-  const upNet = up - WHOLE_MARS_NUDGE_DOWN_PX / Math.max(canvas.clientHeight, 1)
-  const dy = 2 * upNet * ty * dist
-  const pos = Cartesian3.multiplyByScalar(zenith, dist, new Cartesian3())
-  Cartesian3.subtract(pos, Cartesian3.multiplyByScalar(east, dx, new Cartesian3()), pos)
-  Cartesian3.subtract(pos, Cartesian3.multiplyByScalar(north, dy, new Cartesian3()), pos)
-  return { destination: pos, orientation: { direction: Cartesian3.negate(zenith, new Cartesian3()), up: north } }
+  return { destination: Cartesian3.fromDegrees(GALE.lon, 12, dist - MARS_RADIUS, MARS) }
 }
 const LANDING_ICON = (() => {
   // Landing-site symbol: teal ring with a white centre.
@@ -263,6 +242,9 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
   const [unitCard, setUnitCard] = useState<GeologicUnitProps | null>(null)
   const [waypointCard, setWaypointCard] = useState<CuriosityWaypoint | null>(null)
   const [landingCard, setLandingCard] = useState<LandingSite | null>(null)
+  // The hover-info bar lives in its own layout row under the map (App.tsx #inspector-slot).
+  const [inspectorSlot, setInspectorSlot] = useState<HTMLElement | null>(null)
+  useEffect(() => { setInspectorSlot(document.getElementById('inspector-slot')) }, [])
   const reliefRef = useRef<ImageryLayer>()
   // 'flat' or the 3D terrain in use (labels use it to enable terrain-occlusion checks).
   const [terrainKey, setTerrainKey] = useState('flat')
@@ -347,17 +329,36 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
   // ---------- top-bar tabs: Gale study area / Whole Mars ----------
   const { view, setView } = layers
   useEffect(() => { if (reliefRef.current) reliefRef.current.show = view === 'mars' }, [viewer, view])
+  // Switching views resizes the map (the elevation panel comes and goes), so each view's camera
+  // target is computed once the new layout is applied: after React commits the view change,
+  // viewer.resize() makes Cesium pick up the new canvas size, then the camera flies.
+  const pendingFly = useRef<(() => void) | null>(null)
+  const flyAfterLayout = (next: typeof view, fly: (v: CesiumViewer) => void) => {
+    if (!viewer) return
+    const run = () => { if (!viewer.isDestroyed()) { viewer.resize(); fly(viewer) } }
+    if (next === view) run()                 // same view: the layout does not change
+    else pendingFly.current = run
+  }
+  useEffect(() => {
+    const run = pendingFly.current
+    if (!run) return
+    pendingFly.current = null
+    const id = requestAnimationFrame(run)
+    return () => cancelAnimationFrame(id)
+  }, [view])
   const goWholeMars = () => {
     setView('mars')
     setPicking(null)
     closeCards()
-    if (viewer) viewer.camera.flyTo({ ...wholeMarsCamera(viewer), duration: 2.5 })
+    flyAfterLayout('mars', v => v.camera.flyTo({ ...wholeMarsCamera(v), duration: 2.5 }))
   }
   const goStudyArea = () => {
     setView('study')
     closeCards()
-    if (viewer && rect) viewer.camera.flyTo({ destination: rect, duration: 2.5 })
-    else viewer?.camera.flyTo({ destination: Cartesian3.fromDegrees(...START_VIEW, MARS), duration: 2.5 })
+    flyAfterLayout('study', v => {
+      if (rect) v.camera.flyTo({ destination: rect, duration: 2.5 })
+      else v.camera.flyTo({ destination: Cartesian3.fromDegrees(...START_VIEW, MARS), duration: 2.5 })
+    })
   }
 
   // ---------- HiRISE ortho photo mosaic (imagery tiles from the backend, toggled) ----------
@@ -676,7 +677,7 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
         ))}
       </Viewer>
 
-      <Inspector viewer={viewer} />
+      {inspectorSlot && createPortal(<Inspector viewer={viewer} />, inspectorSlot)}
       {/* Globe tools (top-right) */}
       <div className="globe-tools" data-occludes>
         <div className="view-tabs" role="tablist" aria-label="Map view">

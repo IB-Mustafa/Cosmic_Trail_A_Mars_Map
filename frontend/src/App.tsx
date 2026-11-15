@@ -44,7 +44,9 @@ export default function App() {
 
   return (
     <div className={`app view-${view}`}>
-      <div className="globe"><Globe sites={sites} /></div>
+      {/* Layout regions (App.css grid): sidebar | map, with the hover-info bar and the
+          elevation panel below the map — never on top of it, so the Cesium canvas is exactly
+          the visible map and its camera centres on it. */}
       <aside className="sidebar">
         <header className="glass brand" data-occludes>
           <h1>COSMIC TRAIL</h1>
@@ -57,8 +59,12 @@ export default function App() {
         {view === 'study' && <RoutePanel />}
         <LayerControls />
       </aside>
+      <main className="map-area">
+        <div className="globe"><Globe sites={sites} /></div>
+        <Chatbot />
+      </main>
+      <div id="inspector-slot" className="inspector-slot" />
       {view === 'study' && <section className="glass bottom" data-occludes><ElevationChart /></section>}
-      <Chatbot />
     </div>
   )
 }
