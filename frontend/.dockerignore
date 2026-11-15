@@ -1,0 +1,6 @@
+node_modules
+dist
+*.tsbuildinfo
+# local dev settings must not leak into the image (VITE_API_BASE=http://127.0.0.1:8000)
+.env.local
+*.local

@@ -1,0 +1,22 @@
+# Keep the backend build context small: the image only needs app/, scripts/, tests/
+# and requirements.txt. Data comes from Hugging Face into a volume at runtime.
+.git
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+data
+cosmic-trail-git-ignored-files
+# only what the backend reads is needed from frontend/
+frontend/*
+!frontend/index.html
+!frontend/static
+!frontend/src
+frontend/src/*
+!frontend/src/data
+frontend/src/data/*
+!frontend/src/data/mars_labels.json
+*.md
+docker-compose*.yml
+Dockerfile

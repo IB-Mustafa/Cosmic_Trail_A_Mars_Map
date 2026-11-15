@@ -120,7 +120,11 @@ checks and fixes for common problems.
    north?".
 6. Switch to **Whole Mars** to see the landing sites, then click the Gale Crater marker to come back.
 
-## Tests
+🐳 **Easiest: Docker.** With Docker installed, `docker compose up --build`, then open
+http://localhost:8080. See [DOCKER.md](DOCKER.md).
+
+📖 **Manual setup (for development), a step-by-step guide for Windows, macOS and Linux:
+[LOCAL_SETUP.md](LOCAL_SETUP.md).**
 
 ```powershell
 python -m pytest

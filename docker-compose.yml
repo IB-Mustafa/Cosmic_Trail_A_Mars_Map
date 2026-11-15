@@ -1,0 +1,58 @@
+# COSMIC TRAIL with Docker — see DOCKER.md.
+#
+#   docker compose up --build      # first time (downloads ~236 MB of data once)
+#   open http://localhost:8080
+#
+# Services:
+#   data      one-time job: downloads the Hugging Face data into the cosmic-data volume,
+#             then exits. Skipped on later starts once the download has completed.
+#   backend   FastAPI API (not published to the host; reached through the frontend).
+#   frontend  nginx serving the built app and forwarding /api to the backend.
+name: cosmic-trail
+
+x-backend: &backend
+  build: .
+  image: cosmic-trail-backend
+  volumes:
+    - cosmic-data:/app/data
+  environment:
+    # optional: a Hugging Face token if you hit rate limits (no account needed otherwise)
+    HF_TOKEN: ${HF_TOKEN:-}
+
+services:
+  data:
+    <<: *backend
+    command:
+      - sh
+      - -c
+      - |
+        if [ -f data/.download-complete ]; then
+          echo "Data already downloaded (remove the cosmic-data volume to re-download)."
+        else
+          python scripts/download_data.py && touch data/.download-complete
+        fi
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  backend:
+    <<: *backend
+    depends_on:
+      data:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    image: cosmic-trail-frontend
+    ports:
+      # Bound to this computer only. Change to "8080:80" to allow other devices on your network.
+      - "127.0.0.1:${COSMIC_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  cosmic-data:

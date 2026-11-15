@@ -152,7 +152,10 @@ async def lifespan(application: FastAPI):
                 print(f"[COSMIC TRAIL] Route tables for {ds_id} not prebuilt: {exc}")
     threading.Thread(target=_prime_all, name="prime-routing", daemon=True).start()
     if not DATASETS:
-        print("[COSMIC TRAIL] No datasets found. Run scripts/make_synthetic_demo.py first.")
+        print(f"[COSMIC TRAIL] No datasets found in {DATA_DIR}. Download them with "
+              "`python scripts/download_data.py` (Docker: start with `docker compose up`, "
+              "which does this for you), or generate synthetic terrain with "
+              "`python scripts/make_synthetic_demo.py`.")
     yield
 
 
