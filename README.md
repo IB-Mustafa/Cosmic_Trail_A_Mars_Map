@@ -3,7 +3,7 @@ cd "D:\NASA project\Cosmic_Trail_A_Mars_Map"
 @'
 # 🚀 COSMIC TRAIL — Offline Marswalk Planner
 
-**Team CosmicGirls · NASA Space Apps 2026**  
+**Team CosmiCore · NASA Space Apps 2026**  
 Challenge: *Interplanetary Survival Guide: Martian Map*
 
 ---
