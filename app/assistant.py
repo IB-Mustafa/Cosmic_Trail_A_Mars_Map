@@ -32,6 +32,7 @@ from typing import Any
 import numpy as np
 
 from . import aria_nlu as nlu
+from . import aria_places as places
 from . import aria_templates as tpl
 from . import context as ctx
 from . import weather_facts as wf
@@ -53,12 +54,6 @@ DIRECTIONS = {
 NICE_DIR = {"north": "north", "northeast": "north-east", "east": "east", "southeast": "south-east",
             "south": "south", "southwest": "south-west", "west": "west", "northwest": "north-west"}
 
-# Named places with published coordinates (science cards); matched in the message.
-PLACE_WORDS = {
-    "bradbury": "bradbury_landing",
-    "mount sharp": "aeolis_mons", "aeolis mons": "aeolis_mons",
-    "aeolis palus": "aeolis_palus",
-}
 
 # Location-specific questions, checked before topic words ("path", "clay", "temperature"…).
 GO_TO_CLAY = re.compile(
@@ -72,6 +67,10 @@ ROUTE_THERMAL = re.compile(
 COARSE = {"temperature": "weather", "radiation": "weather", "wind": "weather", "pressure": "weather",
           "dust": "weather", "safety_here": "slope", "direction_safety": "slope", "route_danger": "route_safety",
           "route_length": "distance"}
+
+# Answers that depend on where you are; a named place can stand in for the map centre.
+LOCATION_INTENTS = ("safety_here", "direction_safety", "hazard", "elevation", "place_info", "minerals",
+                    "science_sites", "go_to_clay", "curiosity_route")
 
 SUGGESTIONS = ["Is it safe to travel north?", "What's the temperature at night compared to day?",
                "What's interesting near me?", "Does the sun appear in this region?"]
@@ -99,13 +98,8 @@ def detect_direction(message: str) -> tuple[str, float] | None:
 
 
 def detect_place(message: str) -> dict | None:
-    m = message.lower()
-    for word, card_id in PLACE_WORDS.items():
-        if word in m:
-            card = next((c for c in CARDS if c.card_id == card_id), None)
-            if card and card.lon is not None:
-                return {"name": card.site, "lon": card.lon, "lat": card.lat}
-    return None
+    """A named place in the message (app/aria_places.py: Gale sites with typos allowed, IAU names exact)."""
+    return places.find_place(message)
 
 
 def great_circle_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
@@ -117,6 +111,11 @@ def great_circle_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
 
 def _fmt_pos(lon: float, lat: float) -> str:
     return f"{abs(lat):.4f}°{'S' if lat < 0 else 'N'}, {abs(lon):.4f}°{'W' if lon < 0 else 'E'}"
+
+
+def _try_these(suggestions: list[str], lead: str = "Try one of these:") -> str:
+    """The suggestions as plain text too, so they stay visible even where the buttons don't render."""
+    return f"{lead} " + "; ".join(f"“{s}”" for s in suggestions) + "."
 
 
 def _bearing_word(deg: float) -> str:
@@ -198,7 +197,7 @@ class Assistant:
         return Part("outside_grid",
                     f"That point is outside the 5 m routing grid, so I can't give {what} there.", reason,
                     "Move the map inside the dashed routable area, or name a place like Bradbury Landing.",
-                    sources=sources, confidence=conf, data=data, caveat=f"Position: {_fmt_pos(lon, lat)}.")
+                    sources=sources, confidence=conf, data=data)
 
     def _dune_sentence(self, dune: dict) -> str:
         if not dune.get("loaded"):
@@ -250,7 +249,7 @@ class Assistant:
                           "cells_above_max": above_m, "nearest_steep": nearest_steep, "dunes": dune,
                           "data_quality": ctx.source_at(self.ds, r, c), "radius_m": NEIGHBOURHOOD_M,
                           "hazard_radius_m": HAZARD_RADIUS_M},
-                    caveat=f"{_fmt_pos(lon, lat)}. Judged on slope only, from a 5 m grid: boulders, loose sand and "
+                    caveat="Judged on slope only, from a 5 m grid: boulders, loose sand and "
                            "small scarps are not resolved. Thresholds come from past missions, not a safety certification.")
 
     # ---------- safety in a direction (sector of the slope grid) ----------
@@ -313,7 +312,7 @@ class Assistant:
         srcs = sorted({x for s in good for x in s["sources"]})
         source = " + ".join(_grid_source(x) for x in srcs) if srcs else _grid_source("HiRISE DTM")
         conf = "high" if srcs == ["HiRISE DTM"] else "medium"
-        caveat = (f"From {_fmt_pos(lon, lat)}. Straight-ahead sector, not a planned route. 5 m grid; thresholds from "
+        caveat = ("Straight-ahead sector, not a planned route. 5 m grid; thresholds from "
                   "past missions, not a safety certification.")
         if len(good) == 2:
             score = lambda s: (s["frac_over_15"], s["frac_over_10"], s["typical_deg"])
@@ -384,7 +383,7 @@ class Assistant:
                 tip = "Planned routes go around it; on foot, give it a wide berth."
         return Part("hazard", answer, reason, tip, sources=[_grid_source(src)], short_source=src,
                     confidence="high" if src == "HiRISE DTM" else "medium", data=data,
-                    caveat=f"{_fmt_pos(lon, lat)}. Only slope is modelled (5 m grid).")
+                    caveat="Only slope is modelled (5 m grid).")
 
     def elevation(self, lon: float, lat: float, seed: str) -> Part:
         rc = self._rc(lon, lat)
@@ -473,7 +472,7 @@ class Assistant:
                         f"That's the great-circle distance from the centre of your map ({_fmt_pos(lon, lat)}); a "
                         "walkable route will be longer.",
                         "Set it as destination B and press Find Route to see the real path.",
-                        sources=[f"Published coordinates of {place['name']} (COSMIC TRAIL science cards)"],
+                        sources=[place["source"]],
                         confidence="high", data={"distance_m": round(d), "to": place["name"],
                                                  "from": {"lon": lon, "lat": lat}})
         if route and route.get("surface_length_3d_m"):
@@ -577,7 +576,7 @@ class Assistant:
                                   f"confirmed {site['mineral']} there.", terrain,
                     "Tap “Set as Destination B”, then press Find Route for a path that avoids steep ground.",
                     sources=[src, "COSMIC TRAIL line check on the HiRISE DTM"], confidence="medium", data=data,
-                    caveat=f"Straight-line check from {_fmt_pos(lon, lat)}, not a planned route. Position approximate.")
+                    caveat="Straight-line check from your position, not a planned route. Position approximate.")
 
     def place_info(self, lon: float, lat: float, seed: str) -> Part:
         rc = self._rc(lon, lat)
@@ -598,7 +597,7 @@ class Assistant:
             return Part("place_info", "You're outside the detailed 5 m map, so I only have coarse information here.",
                         f"Geologically, {unit_txt}, and {clay_txt}. HiRISE coverage: no.",
                         "Move inside the dashed routable area for detailed terrain answers.",
-                        sources=sources, confidence="low", data=data, caveat=f"{_fmt_pos(lon, lat)}.")
+                        sources=sources, confidence="low", data=data)
         r, c = rc
         e = float(self.ds.elev[r, c])
         s_, inside, _ = self._window(r, c, NEIGHBOURHOOD_M)
@@ -617,7 +616,7 @@ class Assistant:
                     "Ask me what's interesting nearby, or whether it's safe to head in a particular direction.",
                     sources=[_grid_source(src).replace("slope analysis", "terrain")] + sources,
                     confidence="high" if hirise else "medium", data=data,
-                    caveat=f"{_fmt_pos(lon, lat)}. Elevation relative to the Mars areoid; unit polygons are simplified.")
+                    caveat="Elevation relative to the Mars areoid; unit polygons are simplified.")
 
     def science_sites(self, lon: float, lat: float, seed: str) -> Part:
         sites = [{"name": c.site, "lon": c.lon, "lat": c.lat, "summary": c.summary, "card": True}
@@ -747,14 +746,22 @@ class Assistant:
                     caveat=f"Temperatures and radiation are published figures ({wf.AIR_TEMP_PERIOD}), not live data. "
                            "General guidance, not a safety assessment.")
 
+    # No data is used in these replies, so they carry no Source line and no data-source badge.
     def greeting(self, seed: str) -> Part:
         return Part("greeting", tpl.pick(seed, "greeting.answer"), tpl.pick(seed, "greeting.reason"),
-                    "Here are a few things you can ask me:", sources=["ARIA, COSMIC TRAIL's offline assistant"],
-                    suggestions=SUGGESTIONS)
+                    _try_these(SUGGESTIONS, "Here are a few things you can ask me:"), suggestions=SUGGESTIONS)
 
     def unknown(self, seed: str) -> Part:
         return Part("unknown", tpl.pick(seed, "unknown.answer"), tpl.pick(seed, "unknown.reason"),
-                    "Try one of these:", sources=["ARIA, COSMIC TRAIL's offline assistant"], suggestions=SUGGESTIONS)
+                    _try_these(SUGGESTIONS), suggestions=SUGGESTIONS)
+
+    def unknown_place(self, name: str) -> Part:
+        known = places.known_place_names()
+        sugg = [f"It's near {known[0]}", f"What about {known[1]}?", f"Am I safe at {known[2]}?"]
+        return Part("unknown_place", f"I don't have “{name}” in my place list, so I can't use it as your position.",
+                    f"Places I do know around Gale Crater: {', '.join(known[:-1])} and {known[-1]}. I also know the "
+                    "IAU-named features on the globe, by their exact name.",
+                    _try_these(sugg), data={"unknown_place": name, "known_places": known}, suggestions=sugg)
 
     # ---------- entry point ----------
     def answer(self, message: str, lon: float, lat: float, route: dict | None = None,
@@ -766,18 +773,35 @@ class Assistant:
         if previous and previous.get("topic"):
             prev = {"topic": previous["topic"],
                     "directions": nlu.understand(previous.get("message") or "").directions}
+        follow = False
         if GO_TO_CLAY.search(m):
             intents, parse = ["go_to_clay"], nlu.understand(message)
         elif ROUTE_THERMAL.search(m):
             intents, parse = ["route_thermal"], nlu.understand(message)
         else:
             res = nlu.resolve(message, prev)
-            intents, parse = res.intents, res.parse
+            intents, parse, follow = res.intents, res.parse, res.follow_up
         directions = parse.directions or (prev or {}).get("directions") or []
+
+        # ---- a named place as the position ("it's near Pahrump Hills", "what about Yellowknife Bay?")
         place = detect_place(message)
-        if place and intents[0] in ("safety_here", "direction_safety", "hazard", "elevation", "place_info",
-                                    "minerals", "science_sites", "go_to_clay", "curiosity_route"):
-            lon, lat = place["lon"], place["lat"]           # "…from Bradbury Landing" → analyse there
+        if place and place.get("region") and re.search(r"\bhere\b", m):
+            place = None                                    # "am I safe here in Gale Crater?" → keep the map point
+        prev_topic = (prev or {}).get("topic")
+        if place:
+            location_prev = prev_topic in LOCATION_INTENTS or prev_topic == "distance"
+            if intents == ["unknown"] or (follow and not location_prev):
+                # Only a place was given: answer the previous question there, or describe the place.
+                intents = [prev_topic] if location_prev else ["place_info"]
+        else:
+            name = places.unknown_place_name(message)
+            if name and (intents == ["unknown"] or intents[0] in LOCATION_INTENTS or follow):
+                return self._combine([self.unknown_place(name)], lon, lat)
+        used_place = None
+        if place and intents[0] in LOCATION_INTENTS and not (
+                intents[0] == "go_to_clay" and any(s["name"] == place["name"] for s in ctx.CONFIRMED_CLAY_SITES)):
+            lon, lat = place["lon"], place["lat"]           # analyse at the named place
+            used_place = place
 
         handlers = {
             "safety_here": lambda: self.safety_here(lon, lat, seed),
@@ -805,6 +829,16 @@ class Assistant:
             "greeting": lambda: self.greeting(seed),
         }
         parts = [handlers.get(i, lambda: self.unknown(seed))() for i in intents]
+        if used_place:
+            p = parts[0]
+            name = re.sub(r"\s*\(.*\)", "", used_place["name"])
+            pos = _fmt_pos(used_place["lon"], used_place["lat"]) + (", approximate" if used_place["approximate"] else "")
+            p.answer = f"Using {name} ({pos}) as your position. {p.answer}"
+            offer = f"Want me to move the map to {name}?"
+            p.offer = f"{p.offer} {offer}".strip() if p.offer else offer
+            p.sources = p.sources + [f"Position of {name}: {used_place['source']}"]
+            p.data["place"] = {k: used_place.get(k) for k in ("name", "lon", "lat", "approximate", "source", "match")}
+            p.data["move_map"] = {"type": "move_map", "lon": used_place["lon"], "lat": used_place["lat"], "label": name}
         return self._combine(parts, lon, lat)
 
     def _combine(self, parts: list[Part], lon: float, lat: float) -> dict:
@@ -815,7 +849,7 @@ class Assistant:
             data = dict(p.data)
         else:   # several topics in one question: one paragraph each, one Source line
             paras = [" ".join(x for x in (p.answer, p.reason, p.tip) if x) for p in parts]
-            text = "\n\n".join(paras) + f"\n\nSource: {'; '.join(sources)}"
+            text = "\n\n".join(paras) + (f"\n\nSource: {'; '.join(sources)}" if sources else "")
             data = {}
             for p in parts:
                 data.update(p.data)
@@ -827,7 +861,7 @@ class Assistant:
             intent = "weather"
         suggestions = list(dict.fromkeys(s for p in parts for s in p.suggestions))
         caveats = [p.caveat for p in parts if p.caveat]
-        data_source = " + ".join(dict.fromkeys(p.short_source or " + ".join(p.sources) for p in parts))
+        data_source = " + ".join(dict.fromkeys(s for p in parts if (s := p.short_source or " + ".join(p.sources))))
         return {"reply": text, "data_source": data_source, "confidence": conf, "intent": intent,
                 "topic": first.intent, "topics": [p.intent for p in parts],
                 "location": {"lon": lon, "lat": lat}, "data": data,

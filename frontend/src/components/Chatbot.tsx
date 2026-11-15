@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { askAssistant, routeSummary, type AssistantAction, type AssistantReply, type ChatTurn } from '../api/cosmic'
 import { useRouteStore } from '../store/routeStore'
-import { getMapCenter } from './Globe'
+import { centerMapOn, getMapCenter } from './Globe'
 
 /** `local`: a note from the app itself (greeting, "B set…", errors), not sent back as conversation. */
 interface Msg { role: 'aria' | 'user'; text: string; reply?: AssistantReply; local?: boolean }
@@ -28,9 +28,10 @@ const GREETING =
 
 const QUICK = ['Am I safe here?', 'What minerals are nearby?', 'Analyze my route', 'How cold is it?']
 
-/** Data-source badges shown under each reply. */
+/** Data-source badges shown under each reply (none when the reply used no data, e.g. the fallback). */
 function badges(source: string): string[] {
   const s = source.toLowerCase(), out: string[] = []
+  if (!s.trim()) return out
   if (s.includes('hirise')) out.push('📡 HiRISE Data')
   if (s.includes('usgs')) out.push('🗺 USGS Gale DEM')
   if (s.includes('mola')) out.push('🛰 MOLA')
@@ -40,8 +41,11 @@ function badges(source: string): string[] {
       || s.includes('hassler')) out.push('📚 Published studies')
   if (s.includes('general mars knowledge') || s.includes('mars fact sheet') || s.includes('opportunity mission'))
     out.push('🌍 General Mars facts')
-  return out.length ? out : ['ℹ No data source']
+  return out
 }
+
+/** ARIA's offer to centre the map on a place the user named. */
+interface MoveMapAction { type: 'move_map'; lon: number; lat: number; label: string }
 
 // Panel size: dragged from the top-left corner (the panel is anchored bottom-right).
 const SIZE_KEY = 'cosmic-trail:aria-size'
@@ -95,6 +99,12 @@ export default function Chatbot() {
     setEnd({ lon: a.lon, lat: a.lat })
     setPickMessage({ target: 'end', kind: 'ok', text: `B set to ${a.label} (${fmt(a.lon, a.lat)}) by ARIA. Press Find Route.` })
     setMsgs(m => [...m, { role: 'aria', text: `📍 Destination B set to ${a.label}. Press Find Route to plan the path.`, local: true }])
+  }
+  const moveMap = (a: MoveMapAction) => {
+    const ok = centerMapOn(a.lon, a.lat)
+    setMsgs(m => [...m, { role: 'aria', local: true, text: ok
+      ? `🗺 Moved the map to ${a.label} (${fmt(a.lon, a.lat)}). My answers now use this point.`
+      : "The map isn't ready yet, so I couldn't move it. Please try again in a moment." }])
   }
   const [size, setSize] = useState<Size>(loadSize)
   const drag = useRef<{ x: number; y: number; w: number; h: number } | null>(null)
@@ -192,7 +202,7 @@ export default function Chatbot() {
                     {source && <p className="aria-source"><span>Source</span> {source}</p>}
                   </>
                 })()}
-                {m.reply?.suggestions && m.reply.suggestions.length > 0 && i === msgs.length - 1 && (
+                {m.reply?.suggestions && m.reply.suggestions.length > 0 && (
                   <div className="aria-suggest">
                     {m.reply.suggestions.map(s => (
                       <button key={s} type="button" onClick={() => send(s)} disabled={busy}>{s}</button>
@@ -207,14 +217,22 @@ export default function Chatbot() {
                     </button>
                   )
                 })()}
+                {(m.reply?.data as { move_map?: MoveMapAction } | undefined)?.move_map?.type === 'move_map' && (() => {
+                  const a = (m.reply!.data as { move_map: MoveMapAction }).move_map
+                  return (
+                    <button type="button" className="aria-action" onClick={() => moveMap(a)}>
+                      🗺 Move map to {a.label}
+                    </button>
+                  )
+                })()}
                 {m.reply && (
                   <div className="aria-meta">
                     {badges(m.reply.data_source).map(b => <span key={b} className="badge">{b}</span>)}
                     <span className={`conf ${m.reply.confidence}`}>confidence: {m.reply.confidence}</span>
                     <span className="where">📍 {fmt(m.reply.location.lon, m.reply.location.lat)}</span>
-                    {m.reply.caveat && <small>{m.reply.caveat}</small>}
                   </div>
                 )}
+                {m.reply?.caveat && <p className="aria-caveat">{m.reply.caveat}</p>}
               </div>
             ))}
             {busy && <div className="aria-msg aria typing"><p>Analysing terrain…</p></div>}

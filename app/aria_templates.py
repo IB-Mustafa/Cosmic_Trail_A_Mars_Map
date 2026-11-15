@@ -154,8 +154,10 @@ def say(seed: str, key: str, **fields) -> str:
 
 
 def compose(answer: str, reason: str = "", tip: str = "", offer: str = "", source: str = "") -> str:
-    """Direct answer + reason, then tip + offer, then the Source line."""
+    """Direct answer + reason, then tip + offer, then the Source line (left out when no data was used)."""
     first = " ".join(x.strip() for x in (answer, reason) if x and x.strip())
     second = " ".join(x.strip() for x in (tip, offer) if x and x.strip())
     paragraphs = [p for p in (first, second) if p]
-    return "\n\n".join(paragraphs) + f"\n\nSource: {source or 'COSMIC TRAIL'}"
+    if source:
+        paragraphs.append(f"Source: {source}")
+    return "\n\n".join(paragraphs)

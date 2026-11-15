@@ -275,7 +275,10 @@ async def test_every_reply_ends_with_source_and_has_no_invented_numbers(aria):
     for q in BATTERY:
         d = ask(aria, q)
         lines = d["reply"].split("\n")
-        assert lines[-1].startswith("Source: ") and len(lines[-1]) > len("Source: ") + 5, (q, lines[-1])
+        if d["topic"] in ("unknown", "greeting"):      # no data used → no Source line at all
+            assert "Source:" not in d["reply"] and not d["sources"] and not d["data_source"], q
+        else:
+            assert lines[-1].startswith("Source: ") and len(lines[-1]) > len("Source: ") + 5, (q, lines[-1])
         assert not lines[0].startswith(("✅", "⚠️", "❌", "🔬", "📍", "📏", "❓")), q          # conversational
         assert invented_numbers(d, q) == [], (q, invented_numbers(d, q), d["reply"])
         assert "live" not in d["reply"].lower().replace("deliver", "") or "not live" in d["reply"].lower(), q
@@ -288,3 +291,121 @@ async def test_survival_answers_the_question_that_was_asked(aria):
     assert danger["topic"] == "survival" and danger["reply"].startswith("Yes")
     survive = ask(aria, "Can astronauts survive outside?")
     assert survive["topic"] == "survival" and survive["reply"].startswith(("No", "Not without"))
+
+
+# ---------------------------------------------------------------------------
+# Place names as locations ("it's near Pahrump Hills")
+# ---------------------------------------------------------------------------
+from app import aria_places as P   # noqa: E402
+
+PAHRUMP = next(p for p in P.gale_places() if p["name"] == "Pahrump Hills")
+
+
+@pytest.mark.parametrize("q,match", [("It's near Pahrump Hills", "exact"), ("its near pahrump hills", "exact"),
+                                     ("im near parump hills", "fuzzy"), ("near parump hils?", "fuzzy")])
+async def test_place_name_is_recognised_exact_lowercase_and_with_typos(q, match):
+    p = P.find_place(q)
+    assert p and p["name"] == "Pahrump Hills" and p["match"] == match, q
+
+
+@pytest.mark.parametrize("q,name", [("I'm at Bradbury Landing", "Bradbury Landing"),
+                                    ("what about Yellowknife Bay?", "Yellowknife Bay"),
+                                    ("near yelloknife bay", "Yellowknife Bay"),
+                                    ("we are at murray buttes", "Murray Buttes"),
+                                    ("is it safe on mt sharp", "Aeolis Mons (Mount Sharp)"),
+                                    ("safe at Olympus Mons?", "Olympus Mons")])
+async def test_other_place_names(q, name):
+    assert P.find_place(q)["name"] == name, q
+
+
+@pytest.mark.parametrize("q", ["Is there hematite rich rock?", "what about the clay?", "Is it safe to travel north?",
+                               "how cold is it at night", "Am I safe here?", "Best path to clay?"])
+async def test_ordinary_questions_are_not_taken_for_places(q):
+    assert P.find_place(q) is None and P.unknown_place_name(q) is None, q
+
+
+async def test_place_coordinates_come_from_app_data():
+    """Pahrump Hills is the NASA JPL proposed-path waypoint already in the app (approximate), not a new guess."""
+    import json
+    wps = json.loads(P.ROUTE_FILE.read_text(encoding="utf-8"))["features"][0]["properties"]["waypoints"]
+    wp = next(w for w in wps if w["name"] == "Pahrump Hills")
+    assert (PAHRUMP["lon"], PAHRUMP["lat"]) == (wp["lon"], wp["lat"]) and PAHRUMP["approximate"]
+    assert "NASA JPL" in PAHRUMP["source"]
+
+
+async def test_follow_up_with_a_place_answers_the_previous_question_there(aria):
+    first = ask(aria, "Am I safe here?")
+    assert first["topic"] == "safety_here"
+    d = ask(aria, "it's near Pahrump Hills", previous={"topic": first["topic"], "message": "Am I safe here?"})
+    assert d["topic"] == "safety_here"
+    assert d["reply"].startswith("Using Pahrump Hills (4.6200°S, 137.4253°E, approximate) as your position.")
+    assert (d["location"]["lon"], d["location"]["lat"]) == (PAHRUMP["lon"], PAHRUMP["lat"])
+    assert d["data"]["slope_deg"] != first["data"]["slope_deg"]                     # really computed there
+    assert "move the map to Pahrump Hills" in d["reply"]
+    assert d["data"]["move_map"] == {"type": "move_map", "lon": PAHRUMP["lon"], "lat": PAHRUMP["lat"],
+                                     "label": "Pahrump Hills"}
+    assert "Position of Pahrump Hills: NASA JPL" in d["reply"].split("\n")[-1]
+    assert invented_numbers(d, "it's near Pahrump Hills") == []
+    # same with a typo and with a direction question
+    assert ask(aria, "parump hills", previous={"topic": "safety_here", "message": "Am I safe here?"})["topic"] == "safety_here"
+    n = ask(aria, "what about Yellowknife Bay?", previous={"topic": "direction_safety", "message": "is it safe to go north"})
+    assert n["topic"] == "direction_safety" and n["data"]["direction"] == "north"
+    assert n["reply"].startswith("Using Yellowknife Bay")
+
+
+async def test_place_alone_without_a_location_question_describes_the_place(aria):
+    d = ask(aria, "I'm at Bradbury Landing")
+    assert d["topic"] == "place_info" and d["reply"].startswith("Using Bradbury Landing (4.5895°S, 137.4417°E) as")
+    t = ask(aria, "what about Pahrump Hills?", previous={"topic": "temperature", "message": "how cold is it?"})
+    assert t["topic"] == "place_info" and t["location"]["lat"] == PAHRUMP["lat"]
+
+
+async def test_place_as_destination_is_not_used_as_position(aria):
+    d = ask(aria, "How far is Pahrump Hills?")
+    assert d["topic"] == "distance" and d["location"]["lon"] == BRADBURY[0] and "move_map" not in d["data"]
+    assert d["data"]["to"] == "Pahrump Hills" and "NASA JPL" in d["reply"].split("\n")[-1]
+    clay = ask(aria, "How do I reach Yellowknife Bay?", at=(PAHRUMP["lon"], PAHRUMP["lat"]))
+    assert clay["topic"] == "go_to_clay" and clay["data"]["target"]["distance_m"] > 1000
+    here = ask(aria, "Am I safe here in Gale Crater?")
+    assert here["location"]["lon"] == BRADBURY[0] and "Using" not in here["reply"]
+
+
+async def test_unknown_place_is_named_and_known_places_listed(aria):
+    d = ask(aria, "it's near Foo Rock", previous={"topic": "safety_here", "message": "Am I safe here?"})
+    assert d["topic"] == "unknown_place" and d["data"]["unknown_place"] == "Foo Rock"
+    assert d["reply"].startswith("I don't have “Foo Rock” in my place list")
+    assert all(n in d["reply"] for n in ("Bradbury Landing", "Yellowknife Bay", "Pahrump Hills"))
+    assert "Source:" not in d["reply"] and d["data_source"] == "" and d["sources"] == []
+    assert "Try one of these: “" in d["reply"] and d["suggestions"]
+    assert all(s in d["reply"] for s in d["suggestions"])                           # plain text too
+    for s in d["suggestions"]:                                                     # and they work
+        r = ask(aria, s, previous={"topic": "safety_here", "message": "Am I safe here?"})
+        assert r["topic"] not in ("unknown", "unknown_place") and r["reply"].startswith("Using "), s
+    assert ask(aria, "Am I safe near Atlantis Station?")["topic"] == "unknown_place"
+
+
+async def test_unknown_place_does_not_hide_the_earlier_question(client):
+    h = []
+    assert (await _chat(client, "Am I safe here?", h))["topic"] == "safety_here"
+    assert (await _chat(client, "it's near Foo Rock", h))["topic"] == "unknown_place"
+    d = await _chat(client, "it's near Pahrump Hills", h)
+    assert d["topic"] == "safety_here" and d["reply"].startswith("Using Pahrump Hills")
+
+
+async def test_fallback_shows_suggestions_and_no_source(aria):
+    for q in ("blorp", "tell me a joke", "hi"):
+        d = ask(aria, q)
+        assert d["suggestions"] and all(f"“{s}”" in d["reply"] for s in d["suggestions"]), q
+        assert "Source" not in d["reply"] and "ARIA, COSMIC TRAIL" not in d["reply"], q
+        assert d["data_source"] == "" and d["sources"] == [], q
+    d = ask(aria, "blorp")
+    tail = d["reply"].split("Try one of these:")[1]
+    assert tail.strip().startswith("“"), tail                                       # never left dangling
+
+
+async def test_footer_caveat_has_no_duplicate_position(aria):
+    for q in ("Am I safe here?", "Is it safe to travel north?", "Any hazards?", "What's here?"):
+        c = ask(aria, q)["caveat"] or ""
+        assert "Position" not in c and "°S" not in c and "°E" not in c, (q, c)
+    out = ask(aria, "Am I safe here?", at=(10.0, 10.0))
+    assert out["topic"] == "outside_grid" and not (out["caveat"] or "").startswith("Position")

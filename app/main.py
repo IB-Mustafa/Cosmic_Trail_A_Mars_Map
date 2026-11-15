@@ -577,8 +577,11 @@ def api_assistant_chat(req: AssistantRequest):
     except ValueError as exc:
         raise HTTPException(400, f"Invalid position: {exc}")
     previous = None
+    # "I don't know that place" isn't a topic to follow up on: the question before it still is
+    # ("Am I safe here?" → "near Foo" → "near Pahrump Hills" checks safety at Pahrump Hills).
     last_aria = next((i for i in range(len(req.history) - 1, -1, -1)
-                      if req.history[i].role == "assistant" and req.history[i].topic), None)
+                      if req.history[i].role == "assistant" and req.history[i].topic
+                      and req.history[i].topic != "unknown_place"), None)
     if last_aria is not None:
         asked = next((t.content for t in reversed(req.history[:last_aria]) if t.role == "user"), "")
         previous = {"topic": req.history[last_aria].topic, "message": asked}

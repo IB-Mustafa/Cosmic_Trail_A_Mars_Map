@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  Cartesian2, Cartesian3, Cartographic, Color, ConstantProperty, Credit, CustomHeightmapTerrainProvider,
-  DistanceDisplayCondition, EllipsoidTerrainProvider, GeographicTilingScheme,
+  BoundingSphere, Cartesian2, Cartesian3, Cartographic, Color, ConstantProperty, Credit, CustomHeightmapTerrainProvider,
+  DistanceDisplayCondition, EllipsoidTerrainProvider, GeographicTilingScheme, HeadingPitchRange,
   ClassificationType, HorizontalOrigin, ImageMaterialProperty, Math as CesiumMath, PinBuilder,
   PolygonHierarchy, PolylineDashMaterialProperty,
   Rectangle, ScreenSpaceEventType, UrlTemplateImageryProvider, VerticalOrigin,
@@ -195,6 +195,24 @@ export function getMapCenter(): LonLat | null {
   const hit = (ray && v.scene.globe.pick(ray, v.scene)) ?? undefined
   const c = hit ? Cartographic.fromCartesian(hit, MARS) : v.camera.positionCartographic
   return { lon: +CesiumMath.toDegrees(c.longitude).toFixed(5), lat: +CesiumMath.toDegrees(c.latitude).toFixed(5) }
+}
+
+/** Fly so that `lon, lat` is at the centre of the view (where ARIA reads the position), keeping the
+ *  current view angle and zoom. Returns false when the map isn't ready. */
+export function centerMapOn(lon: number, lat: number): boolean {
+  const v = activeViewer
+  if (!v || v.isDestroyed()) return false
+  const cam = v.camera, canvas = v.scene.canvas
+  const ray = cam.getPickRay(new Cartesian2(canvas.clientWidth / 2, canvas.clientHeight / 2))
+  const hit = (ray && v.scene.globe.pick(ray, v.scene)) ?? undefined
+  const hereH = hit ? Cartographic.fromCartesian(hit, MARS).height : 0
+  const h = v.scene.globe.getHeight(Cartographic.fromDegrees(lon, lat)) ?? hereH
+  const range = hit ? Cartesian3.distance(cam.positionWC, hit) : 4000
+  cam.flyToBoundingSphere(new BoundingSphere(Cartesian3.fromDegrees(lon, lat, h, MARS), 0), {
+    offset: new HeadingPitchRange(cam.heading, Math.min(cam.pitch, -0.35), Math.min(Math.max(range, 1500), 60000)),
+    duration: 1.5,
+  })
+  return true
 }
 
 /** A colour with its alpha scaled by a layer's opacity slider (0–1). */
