@@ -15,6 +15,6 @@ httpx>=0.27,<1          # optional — only needed to run tests
 pytest>=8,<9            # optional — dev
 pytest-asyncio>=0.23    # optional — dev
 
-# The frontend (frontend/, React + Vite + Cesium) needs Node.js 18+ and npm — see LOCAL_SETUP.md.
+# The frontend (frontend/, React + Vite + Cesium) needs Node.js 22+ and npm — see LOCAL_SETUP.md.
 # OpenLayers 10.11.0 (BSD-2-Clause) is bundled under frontend/static/ol/ (legacy page).
 # Data is not in Git: download it with  python scripts/download_data.py  (Hugging Face).

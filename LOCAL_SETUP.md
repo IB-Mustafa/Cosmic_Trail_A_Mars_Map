@@ -427,7 +427,10 @@ With the venv active, from the repo root:
 python -m pytest tests -q
 ```
 
-With the data from step 3 in place, all tests should pass (189 at the time of writing). Tests that need the real
+With the data from step 3 in place there are 197 tests. One of them,
+`test_long_real_route_is_fast_and_near_optimal`, expects a route across the whole study area in
+under 2 seconds. On slower laptops (or while other heavy programs run) it can take 4–5 seconds
+and fail, even though the route is correct. Everything else should pass. Tests that need the real
 HiRISE data are **skipped** (not failed) when `data/hirise_gale/` is missing. The backend does
 not need to be running.
 

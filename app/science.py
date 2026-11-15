@@ -34,8 +34,8 @@ GUIDE_DISCLAIMER = (
 #       Science 343(6169). doi:10.1126/science.1243480
 #   [3] Ming et al. 2014 — Volatiles at Yellowknife Bay
 #       Science 343(6169). doi:10.1126/science.1245267
-#   [4] Grotzinger et al. 2015 — Stratigraphy and sedimentology of a dry
-#       to wet ancient Mars transition. Science 350(6257). doi:10.1126/science.aac7575
+#   [4] Grotzinger et al. 2015 — Deposition, exhumation, and paleoclimate of an
+#       ancient lake deposit, Gale crater, Mars. Science 350(6257). doi:10.1126/science.aac7575
 #   [5] Wikipedia "Bradbury Landing" (citing NBC/NASA) — coordinates
 #       Accessed 2024. As a secondary source; primary is NASA mission reports.
 #   [6] NASA JPL — MSL Science Corner, public releases
