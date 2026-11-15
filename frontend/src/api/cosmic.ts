@@ -320,7 +320,17 @@ export interface AssistantReply {
   data: Record<string, unknown>
   caveat: string | null
   engine: string
+  /** Fine-grained topic(s) of the answer, e.g. "temperature", "direction_safety" (follow-ups use it). */
+  topic?: string
+  topics?: string[]
+  /** Exact sources named in the reply's "Source:" line. */
+  sources?: string[]
+  /** Clickable follow-up questions (greeting / unknown questions). */
+  suggestions?: string[]
 }
+
+/** One earlier chat message, sent so ARIA can resolve follow-ups (kept only in this tab). */
+export interface ChatTurn { role: 'user' | 'assistant'; content: string; topic?: string }
 
 /** Steep (caution) stretches along a route: how many, and which third of the route has most of them. */
 export function cautionStretches(r: RouteResult, caution = 10) {
@@ -351,11 +361,11 @@ export const routeSummary = (r: RouteResult, caution = 10) => {
 
 export const askAssistant = (message: string, context: {
   current_lon?: number; current_lat?: number; dataset_id?: string; last_route?: ReturnType<typeof routeSummary> | null
-}) =>
+}, history: ChatTurn[] = []) =>
   fetch(`${BASE}/api/assistant/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, context }),
+    body: JSON.stringify({ message, context, history }),
   }).then(r => json<AssistantReply>(r))
 
 // ---------------------------------------------------------------------------

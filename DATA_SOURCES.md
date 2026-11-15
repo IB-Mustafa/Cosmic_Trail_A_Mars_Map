@@ -118,6 +118,23 @@ panel's 🔬 / 🌡️ / 📡 lines, are computed from data already in the app:
 > added with `{"kind": "dune", "name": ..., "source": ...}` (see the file's `how_to_add`);
 > restart the backend to load them.
 
+### Place names ARIA accepts as a position — `app/aria_places.py`
+
+When a user names a place ("it's near Pahrump Hills"), ARIA uses that place's coordinates instead of the
+map centre. **No coordinates were added for this**; every position comes from a file listed above:
+
+| Places | Coordinates from | Precision |
+|--------|------------------|-----------|
+| Bradbury Landing, Aeolis Mons (Mount Sharp), Aeolis Palus | science cards in `app/science.py` (cited there) | Bradbury Landing published; the others approximate |
+| Yellowknife Bay | `app/context.py` (Vaniman et al. 2014; Grotzinger et al. 2014) | approximate |
+| Pahrump Hills, Murray Buttes, Hematite Ridge, Clay-bearing Unit | `data/curiosity_official_route.geojson` waypoints ([NASA JPL proposed path](https://science.nasa.gov/resource/curiositys-proposed-path-up-mount-sharp/)) | **approximate** (see the caveat above) |
+| Any IAU-named Mars feature (e.g. Olympus Mons, Jezero Crater) | `frontend/src/data/mars_labels.json` ([IAU/USGS Gazetteer of Planetary Nomenclature](https://planetarynames.wr.usgs.gov/GIS_Downloads)) | feature centre point |
+
+ARIA's reply names the place, its coordinates, says "approximate" where that applies, and cites the
+coordinate source in its Source line. Names that are not in this list get "I don't have 'X' in my place
+list" — ARIA never estimates a position. To make Pahrump Hills (or another waypoint) precise, replace its
+waypoint in the GeoJSON with a position measured from a cited NASA/JPL or USGS product and cite it here.
+
 ## NASA Data Products Used / Referenced
 
 ### Primary: HiRISE Digital Terrain Model (DTM)
