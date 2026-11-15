@@ -27,9 +27,11 @@ COPY --chown=app:app app/ app/
 COPY --chown=app:app scripts/ scripts/
 COPY --chown=app:app tests/ tests/
 COPY --chown=app:app conftest.py pytest.ini ./
-# The backend also serves the legacy OpenLayers page (frontend/index.html + static/, ~1 MB).
+# Files the backend reads from frontend/: the legacy OpenLayers page (index.html + static/,
+# ~1 MB) and the Mars place names ARIA looks up (app/aria_places.py → mars_labels.json).
 COPY --chown=app:app frontend/index.html frontend/index.html
 COPY --chown=app:app frontend/static/ frontend/static/
+COPY --chown=app:app frontend/src/data/mars_labels.json frontend/src/data/mars_labels.json
 
 USER app
 # Compile the numba route search now and keep numba's cache in the image, so the

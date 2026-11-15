@@ -8,10 +8,15 @@ venv
 .pytest_cache
 data
 cosmic-trail-git-ignored-files
-# only the backend's legacy page is needed from frontend/
+# only what the backend reads is needed from frontend/
 frontend/*
 !frontend/index.html
 !frontend/static
+!frontend/src
+frontend/src/*
+!frontend/src/data
+frontend/src/data/*
+!frontend/src/data/mars_labels.json
 *.md
 docker-compose*.yml
 Dockerfile
