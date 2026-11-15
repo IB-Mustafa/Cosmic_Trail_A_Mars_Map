@@ -63,6 +63,8 @@ const molaRelief = new UrlTemplateImageryProvider({
 // sidebar and the bottom bar do not cover it. The offset is a sideways camera translation
 // (what camera.moveLeft / moveDown do), never a CSS transform, so picking and hover stay exact.
 const WHOLE_MARS_SHIFT = { right: 0.065, up: 0.09 }
+// Then nudged back down by a fixed ~0.4 cm (15 CSS px) on screen; the globe's size is unchanged.
+const WHOLE_MARS_NUDGE_DOWN_PX = 15
 const WHOLE_MARS_MIN_DIST = 3.4 * MARS_RADIUS   // from Mars' centre: the previous framing (2.4 R up)
 
 function wholeMarsCamera(v: CesiumViewer) {
@@ -87,7 +89,8 @@ function wholeMarsCamera(v: CesiumViewer) {
   const [east, north, zenith] = [col(0), col(1), col(2)]
   // Moving the camera left/down by these distances moves the planet right/up on screen.
   const dx = 2 * right * tx * dist
-  const dy = 2 * up * ty * dist
+  const upNet = up - WHOLE_MARS_NUDGE_DOWN_PX / Math.max(canvas.clientHeight, 1)
+  const dy = 2 * upNet * ty * dist
   const pos = Cartesian3.multiplyByScalar(zenith, dist, new Cartesian3())
   Cartesian3.subtract(pos, Cartesian3.multiplyByScalar(east, dx, new Cartesian3()), pos)
   Cartesian3.subtract(pos, Cartesian3.multiplyByScalar(north, dy, new Cartesian3()), pos)
