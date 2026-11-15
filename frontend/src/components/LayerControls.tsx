@@ -1,4 +1,5 @@
-import { useLayerStore, type HiriseStyle, type LayerId } from '../store/layerStore'
+
+import { useLayerStore, type HiriseStyle } from '../store/layerStore'
 import { useRouteStore } from '../store/routeStore'
 import { GAZETTEER } from '../mars'
 import { USGS_GEOLOGY_URL } from '../api/cosmic'
@@ -32,11 +33,10 @@ function LayerItem({ on, onClick, children, disabled, title }: {
     </div>
   )
 }
+
 export default function LayerControls() {
   const l = useLayerStore()
-
   const georef = useRouteStore(s => s.georef)
- 
   const ortho = useRouteStore(s => s.ortho)
   const hasOrtho = !!ortho?.available
   const minerals = useRouteStore(s => s.minerals)
@@ -45,19 +45,16 @@ export default function LayerControls() {
   const curiosity = useRouteStore(s => s.curiosityRoute)?.features[0]
   const hasGeology = !!geology?.features.length
   const hasCuriosity = !!curiosity
-  // How many detection sites fall inside the routing grid (honest context for the legend).
   const inArea = georef && minerals?.points
     ? minerals.points.filter(p => p.lon >= georef.west && p.lon <= georef.east && p.lat >= georef.south && p.lat <= georef.north).length
     : null
-
-
 
   return (
     <section className="glass panel" data-occludes>
       <h2>Layers</h2>
       <div className="pills layer-grid">
-        <LayerItem id="hirise" label="HiRISE terrain" on={l.showHiRISE} onClick={l.toggleHiRISE}>HiRISE terrain</LayerItem>
-        <LayerItem id="ortho" label="HiRISE photo" on={l.showOrtho} onClick={l.toggleOrtho} disabled={!hasOrtho}
+        <LayerItem on={l.showHiRISE} onClick={l.toggleHiRISE}>HiRISE terrain</LayerItem>
+        <LayerItem on={l.showOrtho} onClick={l.toggleOrtho} disabled={!hasOrtho}
               title={hasOrtho
                 ? `${ortho!.sources?.length ?? 0} HiRISE orthoimages merged and clipped to the study area `
                   + `(${ortho!.resolution_m} m/px, ${ortho!.credit}). Replaces the HiRISE terrain shading while on.`
@@ -65,28 +62,27 @@ export default function LayerControls() {
                 : ortho?.note ?? 'HiRISE photo mosaic not available from the backend'}>
           📷 HiRISE photo
         </LayerItem>
-    
-        <LayerItem id="footprint" label="Routable area" on={l.showFootprint} onClick={l.toggleFootprint} disabled={!georef}
+        <LayerItem on={l.showFootprint} onClick={l.toggleFootprint} disabled={!georef}
               title="Dashed outline of the area the router covers (always shown while picking A/B)">
           Routable area
         </LayerItem>
-        <LayerItem id="route" label="Route" on={l.showRoute} onClick={l.toggleRoute}>Route</LayerItem>
-        <LayerItem id="sites" label="Science sites" on={l.showSites} onClick={l.toggleSites}>Science sites</LayerItem>
-        <LayerItem id="minerals" label="Minerals" on={l.showMinerals} onClick={l.toggleMinerals} disabled={!hasMinerals}
+        <LayerItem on={l.showRoute} onClick={l.toggleRoute}>Route</LayerItem>
+        <LayerItem on={l.showSites} onClick={l.toggleSites}>Science sites</LayerItem>
+        <LayerItem on={l.showMinerals} onClick={l.toggleMinerals} disabled={!hasMinerals}
               title={hasMinerals ? 'Aqueous-mineral detection sites (Ehlmann & Edwards 2014; CRISM, OMEGA, THEMIS)'
                                  : minerals?.note ?? 'Mineral data not available from the backend'}>
           🔬 Minerals (CRISM/OMEGA)
         </LayerItem>
-        <LayerItem id="labels" label="Place names" on={l.showLabels} onClick={l.toggleLabels}
+        <LayerItem on={l.showLabels} onClick={l.toggleLabels}
               title={`${GAZETTEER.count} official IAU/USGS names, bundled locally`}>
           Place names
         </LayerItem>
-        <LayerItem id="geology" label="Geologic units" on={l.showGeology} onClick={l.toggleGeology} disabled={!hasGeology}
+        <LayerItem on={l.showGeology} onClick={l.toggleGeology} disabled={!hasGeology}
               title={hasGeology ? 'USGS geologic map units (Tanaka et al. 2014, SIM 3292) — click a unit for details'
                                 : 'Geologic units not available from the backend'}>
           🪨 Geologic Units
         </LayerItem>
-        <LayerItem id="traverse" label="Curiosity route" on={l.showTraverse} onClick={l.toggleTraverse} disabled={!hasCuriosity}
+        <LayerItem on={l.showTraverse} onClick={l.toggleTraverse} disabled={!hasCuriosity}
               title={hasCuriosity ? "NASA's proposed Curiosity path up Mount Sharp — click a waypoint for details"
                                   : 'Curiosity route not available from the backend'}>
           🛸 Curiosity route
@@ -141,7 +137,6 @@ export default function LayerControls() {
           <option value="slope">Slope</option>
         </select>
       </label>
-     
       {georef && (
         <details className="georef">
           <summary>Overlay georeference</summary>

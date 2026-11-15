@@ -5,6 +5,8 @@ Run:  pytest tests/test_api.py -v
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
@@ -186,6 +188,60 @@ async def test_route_both(client):
     assert "terrain" in d["routes"]
     assert "comparison" in d
     assert d["comparison"]["relation"] in ("identical", "equivalent", "different")
+
+
+async def test_usgs_gap_fill_route_and_connected_endpoint_snapping(client):
+    """Keep passable USGS terrain routable and snap steep endpoints into A's component."""
+    import numpy as np
+
+    await _require_real_dataset(client)
+    start = {"lat": -4.70909, "lon": 137.45159}
+    destinations = [
+        {"lat": -4.70909, "lon": 137.48544},
+        {"lat": -4.70889, "lon": 137.48544},
+    ]
+    analysis = Path(__file__).resolve().parents[1] / "data" / REAL_DS / "analysis.npz"
+    if not analysis.exists():
+        pytest.skip("real HiRISE analysis grid is not present")
+
+    for destination in destinations:
+        mode = "both" if destination["lat"] == -4.70889 else "shortest"
+        response = await client.post("/api/route", json={
+            "dataset_id": REAL_DS, "start": start, "destination": destination, "mode": mode,
+        })
+        assert response.status_code == 200, response.text
+        routes = response.json()["routes"].values()
+        with np.load(analysis) as data:
+            for route in routes:
+                cells = np.asarray(route["cell_path"], dtype=int)
+                assert data["usgs_filled"][cells[:, 0], cells[:, 1]].all()
+                assert route["slope_max_deg"] <= 15.0
+                if destination["lat"] == -4.70889:
+                    assert cells[-1].tolist() == [3070, 1600]
+
+
+async def test_passable_disconnected_endpoint_suggests_without_moving(client):
+    """An isolated but passable point stays fixed and gets a reachable-point suggestion."""
+    await _require_real_dataset(client)
+    start = {"lat": -4.70909, "lon": 137.45159}
+    destination = {"lat": -4.70879, "lon": 137.48544}
+    response = await client.post("/api/route", json={
+        "dataset_id": REAL_DS, "start": start, "destination": destination, "mode": "shortest",
+    })
+    assert response.status_code == 422
+    error = response.json()["detail"]
+    assert error["error"] == "no_feasible_route"
+    assert "was not moved" in error["message"]
+    suggestion = error["details"]["suggested_destination"]
+    assert suggestion["lat"] != destination["lat"] or suggestion["lon"] != destination["lon"]
+
+    confirmed = await client.post("/api/route", json={
+        "dataset_id": REAL_DS,
+        "start": start,
+        "destination": {"lat": suggestion["lat"], "lon": suggestion["lon"]},
+        "mode": "shortest",
+    })
+    assert confirmed.status_code == 200, confirmed.text
 
 
 async def test_route_params_propagated(client):

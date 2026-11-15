@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import heapq
 import math
+from collections import OrderedDict
 from dataclasses import dataclass, asdict, field
+from threading import RLock
+from weakref import WeakKeyDictionary
 
 import numpy as np
 
@@ -30,6 +33,9 @@ from .terrain import TerrainDataset
 SQRT2 = math.sqrt(2.0)
 NEIGHBOURS = [(-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0),
               (-1, -1, SQRT2), (-1, 1, SQRT2), (1, -1, SQRT2), (1, 1, SQRT2)]
+_REACHABLE_COMPONENTS: WeakKeyDictionary = WeakKeyDictionary()
+_COMPONENT_CACHE_SIZE = 4
+_COMPONENT_CACHE_LOCK = RLock()
 
 
 @dataclass
@@ -142,18 +148,49 @@ REASON_TEXT = {
 }
 
 
-def nearest_passable(ok: np.ndarray, rc: tuple[int, int], max_cells: int = 60) -> tuple[int, int] | None:
+def nearest_passable(ok: np.ndarray, rc: tuple[int, int], max_cells: int = 60,
+                     reachable: bytearray | None = None) -> tuple[int, int] | None:
     r, c = rc
     h, w = ok.shape
     r0, r1 = max(0, r - max_cells), min(h, r + max_cells + 1)
     c0, c1 = max(0, c - max_cells), min(w, c + max_cells + 1)
     sub = ok[r0:r1, c0:c1]
+    if reachable is not None:
+        component = np.frombuffer(reachable, dtype=np.uint8).reshape(ok.shape)
+        sub = sub & (component[r0:r1, c0:c1] != 0)
     idx = np.argwhere(sub)
     if idx.size == 0:
         return None
     d = (idx[:, 0] + r0 - r) ** 2 + (idx[:, 1] + c0 - c) ** 2
     k = int(np.argmin(d))
     return int(idx[k, 0] + r0), int(idx[k, 1] + c0)
+
+
+def _cached_component(ds: TerrainDataset, p: RouteParams,
+                      rc: tuple[int, int]) -> bytearray | None:
+    with _COMPONENT_CACHE_LOCK:
+        cache = _REACHABLE_COMPONENTS.get(ds)
+        if cache is None:
+            return None
+        key = (p.max_slope_deg, p.allow_diagonal, rc)
+        component = cache.get(key)
+        if component is not None:
+            cache.move_to_end(key)
+        return component
+
+
+def _remember_component(ds: TerrainDataset, p: RouteParams,
+                        rc: tuple[int, int], component: bytearray,
+                        *, cacheable: bool) -> None:
+    if not cacheable:
+        return
+    with _COMPONENT_CACHE_LOCK:
+        cache = _REACHABLE_COMPONENTS.setdefault(ds, OrderedDict())
+        key = (p.max_slope_deg, p.allow_diagonal, rc)
+        cache[key] = component
+        cache.move_to_end(key)
+        while len(cache) > _COMPONENT_CACHE_SIZE:
+            cache.popitem(last=False)
 
 
 # -------------------------------------------------------------------- A*
@@ -211,12 +248,12 @@ def _astar(ok: np.ndarray, elev: np.ndarray, slope: np.ndarray, cell: float,
                 counter += 1
                 heapq.heappush(heap, (ng + hh, hh, counter, nxt))
     if g_idx not in dist or not closed[g_idx]:
-        return None, expanded
+        return None, expanded, closed
     path = [g_idx]
     while path[-1] != s_idx:
         path.append(came[path[-1]])
     path.reverse()
-    return [divmod(i, w) for i in path], expanded
+    return [divmod(i, w) for i in path], expanded, None
 
 
 # --------------------------------------------------------------- metrics
@@ -303,18 +340,25 @@ def plan_route(ds: TerrainDataset, start_xy, end_xy, mode: str, p: RouteParams,
                          "Terrain analysis is disabled because no valid elevation model is loaded.")
     if mode not in ("shortest", "terrain"):
         raise RouteError("bad_mode", "mode must be 'shortest' or 'terrain'.")
+    cacheable_components = ok is None and exclusion is None
     if ok is None:
         ok = passable_mask(ds, p, exclusion)
     endpoints = {}
+    endpoint_origins = {}
+    endpoint_needs_snap = {}
+    endpoint_was_passable = {}
     for label, pt in (("start", start_xy), ("destination", end_xy)):
         status, rc = classify_cell(ds, float(pt[0]), float(pt[1]), p, exclusion)
+        endpoint_was_passable[label] = status == "ok"
         if status == "outside_study_area":
             grid = ds.grid
             x = max(grid.x_min, min(grid.x_max, float(pt[0])))
             y = max(grid.y_min, min(grid.y_max, float(pt[1])))
             status, rc = classify_cell(ds, x, y, p, exclusion)
+        endpoint_needs_snap[label] = not endpoint_was_passable[label]
         if status != "ok":
             if rc is not None:
+                endpoint_origins[label] = rc
                 near = nearest_passable(ok, rc)
                 if near:
                     rc = near
@@ -323,17 +367,99 @@ def plan_route(ds: TerrainDataset, start_xy, end_xy, mode: str, p: RouteParams,
                 details = {"point": label, "reason": status}
                 code = "outside_study_area" if status == "outside_study_area" else "point_blocked"
                 raise RouteError(code, f"The {label} {REASON_TEXT[status]}.", details)
+        if label not in endpoint_origins:
+            endpoint_origins[label] = rc
         endpoints[label] = rc
+
+    if endpoint_needs_snap["destination"]:
+        component = _cached_component(ds, p, endpoints["start"]) if cacheable_components else None
+        if component is not None:
+            connected = nearest_passable(
+                ok, endpoint_origins["destination"], reachable=component)
+            if connected is not None:
+                endpoints["destination"] = connected
+    if endpoint_needs_snap["start"]:
+        component = _cached_component(ds, p, endpoints["destination"]) if cacheable_components else None
+        if component is not None:
+            connected = nearest_passable(
+                ok, endpoint_origins["start"], reachable=component)
+            if connected is not None:
+                endpoints["start"] = connected
+
     if endpoints["start"] == endpoints["destination"]:
         raise RouteError("same_point", "Start and destination fall in the same 5 m analysis cell.")
-    cells, expanded = _astar(ok, ds.elev, ds.slope, ds.grid.cell,
-                             endpoints["start"], endpoints["destination"], mode, p)
+    cells, expanded, reachable = _astar(ok, ds.elev, ds.slope, ds.grid.cell,
+                                        endpoints["start"], endpoints["destination"], mode, p)
     if cells is None:
+        _remember_component(
+            ds, p, endpoints["start"], reachable, cacheable=cacheable_components)
+    suggested_point = None
+    suggested_label = None
+
+    if cells is None:
+        if endpoint_needs_snap["destination"]:
+            connected = nearest_passable(
+                ok, endpoint_origins["destination"], reachable=reachable)
+            if connected is not None:
+                endpoints["destination"] = connected
+                cells, extra, _ = _astar(ok, ds.elev, ds.slope, ds.grid.cell,
+                                         endpoints["start"], connected, mode, p)
+                expanded += extra
+
+        if cells is None and endpoint_needs_snap["start"]:
+            _, extra, destination_component = _astar(
+                ok, ds.elev, ds.slope, ds.grid.cell,
+                endpoints["destination"], endpoints["start"], "shortest", p)
+            expanded += extra
+            _remember_component(
+                ds, p, endpoints["destination"], destination_component,
+                cacheable=cacheable_components)
+            connected = nearest_passable(
+                ok, endpoint_origins["start"], reachable=destination_component)
+            if connected is not None:
+                endpoints["start"] = connected
+                cells, extra, _ = _astar(ok, ds.elev, ds.slope, ds.grid.cell,
+                                         connected, endpoints["destination"], mode, p)
+                expanded += extra
+
+    if cells is None:
+        if endpoint_was_passable["destination"] and reachable is not None:
+            suggested_point = nearest_passable(
+                ok, endpoint_origins["destination"], reachable=reachable)
+            suggested_label = "destination"
+        elif endpoint_was_passable["start"] and endpoint_needs_snap["destination"] and reachable is not None:
+            suggested_point = nearest_passable(
+                ok, endpoint_origins["destination"], reachable=reachable)
+            suggested_label = "destination"
+
+        details = {"cells_explored": expanded}
+        message = (
+            "No route exists under the current rules: the two points are in disconnected areas "
+            "(separated by NoData, slopes above the limit, or exclusion zones)."
+        )
+        if suggested_point is not None and ds.proj is not None:
+            x, y = ds.grid.xy(*suggested_point)
+            lon, lat = ds.proj.inverse(x, y)
+            distance_m = math.hypot(
+                suggested_point[0] - endpoint_origins[suggested_label][0],
+                suggested_point[1] - endpoint_origins[suggested_label][1],
+            ) * ds.grid.cell
+            suggestion = {
+                "lat": round(lat, 7),
+                "lon": round(lon, 7),
+                "distance_m": round(distance_m, 1),
+            }
+            details[f"suggested_{suggested_label}"] = suggestion
+            message = (
+                f"No route exists because the selected {suggested_label} is in a disconnected "
+                f"traversable component. It was not moved. A nearby reachable {suggested_label} "
+                f"is at latitude {suggestion['lat']}, longitude {suggestion['lon']} "
+                f"({suggestion['distance_m']} m away); confirm this point to route there."
+            )
         raise RouteError(
             "no_feasible_route",
-            "No route exists under the current rules: the two points are in disconnected areas "
-            "(separated by NoData, slopes above the limit, or exclusion zones).",
-            {"cells_explored": expanded})
+            message,
+            details)
     m = route_metrics(ds, cells, p, mode)
     m["cells_explored"] = expanded
     m["cell_path"] = [[int(r), int(c)] for r, c in cells]

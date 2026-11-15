@@ -7,17 +7,16 @@ export type MapView = 'study' | 'mars'
 
 /** Every toggleable map layer, for per-layer opacity. */
 export type LayerId =
-  | 'hirise' | 'ortho' | 'gapFill' | 'footprint' | 'route'
+  | 'hirise' | 'ortho' | 'footprint' | 'route'
   | 'sites' | 'minerals' | 'labels' | 'geology' | 'traverse'
 
 const FULL: Record<LayerId, number> = {
-  hirise: 1, ortho: 1, gapFill: 1, footprint: 1, route: 1,
+  hirise: 1, ortho: 1, footprint: 1, route: 1,
   sites: 1, minerals: 1, labels: 1, geology: 1, traverse: 1,
 }
 
 interface LayerState {
   showHiRISE: boolean
-  showGapFill: boolean
   showTraverse: boolean
   showRoute: boolean
   showSites: boolean
@@ -35,7 +34,6 @@ interface LayerState {
   opacity: Record<LayerId, number>
   view: MapView
   toggleHiRISE: () => void
-  toggleGapFill: () => void
   toggleTraverse: () => void
   toggleRoute: () => void
   toggleSites: () => void
@@ -52,7 +50,6 @@ interface LayerState {
 
 export const useLayerStore = create<LayerState>(set => ({
   showHiRISE: true,
-  showGapFill: true,
   // NASA's proposed Curiosity path: a reference layer, on by default.
   showTraverse: true,
   showRoute: true,
@@ -67,7 +64,6 @@ export const useLayerStore = create<LayerState>(set => ({
   opacity: FULL,
   view: 'study',
   toggleHiRISE: () => set(s => ({ showHiRISE: !s.showHiRISE, showOrtho: s.showHiRISE ? s.showOrtho : false })),
-  toggleGapFill: () => set(s => ({ showGapFill: !s.showGapFill })),
   toggleTraverse: () => set(s => ({ showTraverse: !s.showTraverse })),
   toggleRoute: () => set(s => ({ showRoute: !s.showRoute })),
   toggleSites: () => set(s => ({ showSites: !s.showSites })),

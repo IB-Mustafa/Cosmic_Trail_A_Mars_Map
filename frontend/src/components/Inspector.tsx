@@ -118,7 +118,7 @@ export default function Inspector({ viewer }: { viewer?: CesiumViewer }) {
           Slope <b>{look?.slope_deg != null ? `${look.slope_deg.toFixed(1)}°` : '—'}</b>
         </span>
       )}
-      {inGrid && src && (l.showHiRISE || l.showGapFill) && (
+      {inGrid && src && l.showHiRISE && (
         <span title="Where this cell's elevation comes from">
           Source <b className={isFill ? 'src-fill' : 'src-hirise'}>{isFill ? src.replace(' (gap fill)', '') + ' · gap fill' : 'HiRISE DTM'}</b>
         </span>
