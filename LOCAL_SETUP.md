@@ -1,5 +1,9 @@
 # Running COSMIC TRAIL locally
 
+> 🐳 **Just want to run the app?** With Docker you can skip all of this:
+> `docker compose up --build`, then open http://localhost:8080. See **[DOCKER.md](DOCKER.md)**.
+> This guide is the manual setup, which you need for developing with live reload.
+
 This guide takes you from nothing to the full app running on your own computer:
 **Windows, macOS or Linux**. Follow the steps in order; each one says how to check that it
 worked before you move on.

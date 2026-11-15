@@ -60,7 +60,10 @@ Follow these steps during a live demo to see how COSMIC TRAIL works:
 
 ## Quick Start
 
-📖 **Full step-by-step guide for Windows, macOS and Linux, with checks and troubleshooting:
+🐳 **Easiest: Docker.** With Docker installed, `docker compose up --build`, then open
+http://localhost:8080. See [DOCKER.md](DOCKER.md).
+
+📖 **Manual setup (for development), a step-by-step guide for Windows, macOS and Linux:
 [LOCAL_SETUP.md](LOCAL_SETUP.md).**
 
 You need **Git**, **Python 3.11–3.14** and **Node.js 22+**. The code is on GitHub; the

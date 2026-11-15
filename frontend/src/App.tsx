@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { georefFromMetadata, getCuriosityRoute, getDatasets, getGeologicUnits, getHealth, getMetadata, getScienceCards, getMinerals, getOrthoInfo, getTerrainInfo, type ScienceCard } from './api/cosmic'
+import { BASE, georefFromMetadata, getCuriosityRoute, getDatasets, getGeologicUnits, getHealth, getMetadata, getScienceCards, getMinerals, getOrthoInfo, getTerrainInfo, type ScienceCard } from './api/cosmic'
 import { useRouteStore } from './store/routeStore'
 import { useLayerStore } from './store/layerStore'
 import Globe from './components/Globe'
@@ -24,7 +24,7 @@ export default function App() {
           ?? list.find(d => d.terrain_available && d.crs)
         if (ds) setDataset(ds); else setBackendError('No dataset with terrain is loaded in the backend.')
       })
-      .catch(e => setBackendError(`Backend not reachable at localhost:8000 (${(e as Error).message}). Start it with: uvicorn app.main:app`))
+      .catch(e => setBackendError(`Backend not reachable at ${BASE || window.location.origin} (${(e as Error).message}). Start it with: uvicorn app.main:app (or docker compose up)`))
     getScienceCards().then(setSites).catch(() => setSites([]))
     getMinerals().then(setMinerals).catch(() => setMinerals(null))
     getGeologicUnits().then(setGeology).catch(() => setGeology(null))
