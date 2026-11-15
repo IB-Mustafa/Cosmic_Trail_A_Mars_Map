@@ -76,22 +76,58 @@ def _load_datasets():
         if ds.proj is not None:
             TILERS[ds_id] = TerrainTiler(ds, context)
     # Optional HiRISE photo layer: the clipped ortho mosaic built by
-    # scripts/build_ortho_mosaic.py (metadata.json "ortho.mosaic"), tiled on demand.
+    # scripts/build_ortho_mosaic.py, tiled on demand. The sharpest mosaic present wins:
+    # metadata "ortho_hires" (or an ortho_mosaic_25cm/50cm.tif built from the full-resolution
+    # RED_A orthos), else the default 1 m mosaic (metadata "ortho").
     for ds_id, ds in DATASETS.items():
-        o = ds.meta.get("ortho") or {}
-        if not o.get("mosaic"):
-            continue
-        path = ds.folder / o["mosaic"]
+        tiler, note = _load_ortho(ds)
+        if tiler is not None:
+            ORTHO[ds_id] = tiler
+            ORTHO_SOURCES[ds_id] = tiler.sources
+        elif note:
+            ORTHO_NOTES[ds_id] = note
+
+
+def _load_ortho(ds) -> tuple[OrthoTiler | None, str | None]:
+    """The dataset's sharpest available ortho mosaic, or (None, why not)."""
+    candidates = []                                     # (file name, metadata block)
+    hires = ds.meta.get("ortho_hires") or {}
+    if hires.get("mosaic"):
+        candidates.append((hires["mosaic"], hires))
+    for name in ("ortho_mosaic_25cm.tif", "ortho_mosaic_50cm.tif"):
+        if name not in (c[0] for c in candidates):
+            candidates.append((name, {}))
+    base = ds.meta.get("ortho") or {}
+    if base.get("mosaic"):
+        candidates.append((base["mosaic"], base))
+    note = None
+    fallback = None                                     # the 1 m mosaic, under a finer one
+    if base.get("mosaic") and (ds.folder / base["mosaic"]).exists():
+        try:
+            fallback = OrthoTiler(ds.folder / base["mosaic"], credit=base.get("credit") or "NASA/JPL-Caltech/UArizona")
+            fallback.sources = list(base.get("sources") or fallback.tag_sources)
+        except Exception as exc:
+            note = f"Ortho mosaic {base['mosaic']} not loaded: {exc}"
+            print(f"[COSMIC TRAIL] {note}")
+    for name, block in candidates:
+        path = ds.folder / name
+        if block is base:
+            if fallback is None and not path.exists():
+                note = f"{name} not found in {ds.folder.name}/ — run scripts/build_ortho_mosaic.py."
+            return fallback, note
         if not path.exists():
-            ORTHO_NOTES[ds_id] = (f"{o['mosaic']} not found in {ds_id}/ — run "
-                                  "scripts/build_ortho_mosaic.py.")
             continue
         try:
-            ORTHO[ds_id] = OrthoTiler(path, credit=o.get("credit") or "NASA/JPL-Caltech/UArizona")
-            ORTHO_SOURCES[ds_id] = list(o.get("sources") or [])
+            tiler = OrthoTiler(path, credit=block.get("credit") or "NASA/JPL-Caltech/UArizona", fallback=fallback)
+            tiler.sources = list(block.get("sources") or tiler.tag_sources)
+            print(f"[COSMIC TRAIL] HiRISE photo layer for {ds.folder.name}: {name} "
+                  f"({tiler.res_m:.2f} m/px, zoom levels to {tiler.max_level})"
+                  + (f", gaps filled from {fallback.path.name}" if fallback else ""))
+            return tiler, None
         except Exception as exc:
-            ORTHO_NOTES[ds_id] = f"Ortho mosaic not loaded: {exc}"
-            print(f"[COSMIC TRAIL] Ortho mosaic for {ds_id} not loaded: {exc}")
+            note = f"Ortho mosaic {name} not loaded: {exc}"
+            print(f"[COSMIC TRAIL] {note}")
+    return fallback, note
 
 
 # ---------------------------------------------------------------------------
@@ -298,11 +334,12 @@ def api_ortho_info(ds_id: str):
     if tiler is None:
         return {"available": False,
                 "note": ORTHO_NOTES.get(ds_id, "This dataset has no HiRISE orthoimage.")}
-    st = tiler.path.stat()
+    files = [tiler.path] + ([tiler.fallback.path] if tiler.fallback is not None else [])
+    stats = [f.stat() for f in files]
     return {**tiler.info(),
-            # Changes whenever the mosaic is rebuilt; the client puts it in tile URLs so
-            # browsers never show tiles cached from an older mosaic (tiles cache for a day).
-            "version": f"{st.st_size:x}-{int(st.st_mtime):x}",
+            # Changes whenever a mosaic is rebuilt or added; the client puts it in tile URLs so
+            # browsers never show tiles cached from an older mosaic (tiles are cached for a year).
+            "version": "-".join(f"{st.st_size:x}{int(st.st_mtime):x}" for st in stats),
             "sources": ORTHO_SOURCES.get(ds_id, []),
             "tiling": "geographic (2x1 tiles at level 0), 256 px greyscale+alpha PNG"}
 
@@ -314,8 +351,11 @@ def api_ortho_tile(ds_id: str, z: int, x: int, y: int):
         raise HTTPException(404, "No orthoimage for this dataset.")
     if not valid_tile(z, x, y):
         raise HTTPException(400, "Tile out of range for the geographic tiling scheme.")
+    # Tile URLs carry the mosaic version (?v=…), so a tile never changes under its URL:
+    # browsers may keep it for a year without revalidating. Rendered tiles are also kept in
+    # the tiler's in-memory LRU cache, so zooming back and forth never re-renders.
     return Response(tiler.tile(z, x, y), media_type="image/png",
-                    headers={"Cache-Control": "public, max-age=86400"})
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 # ---------------------------------------------------------------------------

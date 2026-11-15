@@ -2,8 +2,15 @@
 
 Output: data/hirise_gale/ortho_mosaic.tif — 8-bit greyscale, 0 = no data, ~1 m pixels,
 clipped exactly to the study window (default 137.35–137.55°E, 4.75–4.45°S), tiled,
-DEFLATE-compressed, with internal overviews. The backend cuts globe imagery tiles from it
-(app/ortho_tiles.py → GET /api/datasets/hirise_gale/ortho/{z}/{x}/{y}.png).
+DEFLATE-compressed (lossless), with internal overviews. The backend cuts globe imagery tiles
+from it (app/ortho_tiles.py → GET /api/datasets/hirise_gale/ortho/{z}/{x}/{y}.png).
+
+Higher resolution (optional): `--res 0.5` (or 0.25) builds ortho_mosaic_50cm.tif (…_25cm.tif)
+from the full-resolution RED_A orthoimages (0.25 m/px; about 2.2 GB to download for the five
+images, see scripts/prepare_data.py --ortho-res). It is recorded as metadata.json
+"ortho_hires", and the backend serves it instead of the 1 m mosaic when the file is present.
+Going from 0.25 m to 0.5 m pixels uses a box average (no sharpening, no upscaling). The mosaic
+is built in strips, so memory stays at a few hundred MB even at 0.25 m.
 
 CRS: equidistant cylindrical with lat_ts = 0, lon_0 = window centre, on the IAU Mars
 sphere R = 3 396 190 m — linear in planetocentric lon/lat, so the pixel-edge bounds are
@@ -21,6 +28,7 @@ Mosaic:
 Usage:
     python scripts/build_ortho_mosaic.py                # uses data/hirise_gale/raw/
     python scripts/build_ortho_mosaic.py --res 2        # 2 m pixels (smaller file)
+    python scripts/build_ortho_mosaic.py --res 0.5      # 0.5 m from the RED_A orthos (~0.8 GB)
 
 Also called from scripts/prepare_data.py after the orthos are downloaded.
 """
@@ -41,6 +49,7 @@ RAW_DIRS = [OUT_DIR / "raw", ROOT / "data" / "raw"]
 MARS_R = 3396190.0
 STUDY_WINDOW = (137.35, 137.55, -4.75, -4.45)   # lon_min, lon_max, lat_min, lat_max
 MOSAIC_NAME = "ortho_mosaic.tif"
+STRIP_ROWS = 2048                                 # mosaic rows warped per pass (memory bound)
 CREDIT = "NASA/JPL-Caltech/UArizona"
 
 # HiRISE RED orthoimages (1 m) of the DTM pairs that cover the study window, in priority order.
@@ -52,6 +61,17 @@ ORTHO_FILES = [
     "PSP_009505_1755_RED_C_01_ORTHO.JP2",
     "ESP_040770_1755_RED_C_01_ORTHO.JP2",   # Bagnold dunes
 ]
+# The same images at full HiRISE resolution (RED_A, 0.25 m/px), for mosaics finer than 1 m.
+HIRES_FILES = [n.replace("_RED_C_", "_RED_A_") for n in ORTHO_FILES]
+
+
+def mosaic_name(res_m: float) -> str:
+    """ortho_mosaic.tif for ≥ 1 m pixels, ortho_mosaic_50cm.tif etc. for finer mosaics."""
+    return MOSAIC_NAME if res_m >= 1 else f"ortho_mosaic_{round(res_m * 100)}cm.tif"
+
+
+def metadata_key(res_m: float) -> str:
+    return "ortho" if res_m >= 1 else "ortho_hires"
 
 
 def _find(name: str) -> Path | None:
@@ -91,17 +111,41 @@ def _erode(valid: np.ndarray) -> np.ndarray:
     return out
 
 
+def _contributors(sources, transform, crs, width, height) -> list[str]:
+    """Images that fill at least one pixel of the window (first image wins), at 1/16 scale."""
+    import rasterio
+    from rasterio.enums import Resampling
+    from rasterio.warp import reproject
+
+    f = 16
+    w, h = max(1, width // f), max(1, height // f)
+    t = transform * transform.scale(width / w, height / h)
+    seen = np.zeros((h, w), bool)
+    used = []
+    for n, p in sources:
+        warped = np.zeros((h, w), np.uint8)
+        with rasterio.open(p) as src:
+            reproject(rasterio.band(src, 1), warped, src_nodata=0, dst_nodata=0,
+                      dst_transform=t, dst_crs=crs, resampling=Resampling.nearest)
+        new = (warped > 0) & ~seen
+        if new.any():
+            used.append(n)
+        seen |= warped > 0
+    return used
+
+
 def build(window=STUDY_WINDOW, res_m: float = 1.0, out_path: Path | None = None,
           files: list[str] | None = None, update_metadata: bool = True) -> dict | None:
     """Build the mosaic; returns the metadata "ortho" block, or None if no image is found."""
     import rasterio
+    import rasterio.windows
     from rasterio.crs import CRS
     from rasterio.enums import Resampling
     from rasterio.transform import from_bounds
     from rasterio.warp import reproject
 
-    out_path = out_path or OUT_DIR / MOSAIC_NAME
-    files = files or ORTHO_FILES
+    out_path = out_path or OUT_DIR / mosaic_name(res_m)
+    files = files or (HIRES_FILES if res_m < 1 else ORTHO_FILES)
     lon_min, lon_max, lat_min, lat_max = window
     lon0 = (lon_min + lon_max) / 2
     k = math.pi / 180 * MARS_R                       # metres per degree (lat_ts = 0)
@@ -131,32 +175,49 @@ def build(window=STUDY_WINDOW, res_m: float = 1.0, out_path: Path | None = None,
     pooled = sum(h / h.sum() for h in hists.values() if h.sum() > 0)
 
     print(f"  Mosaic grid {width}x{height} px at {res_m} m, {len(sources)} images")
-    mosaic = np.zeros((height, width), np.uint8)
-    used = []
-    for n, p in sources:
-        t0 = time.time()
-        warped = np.zeros((height, width), np.uint8)
-        with rasterio.open(p) as src:
-            reproject(rasterio.band(src, 1), warped, src_nodata=0, dst_nodata=0,
-                      dst_transform=transform, dst_crs=crs, resampling=Resampling.bilinear)
-        take = _erode(warped > 0) & (mosaic == 0)
-        filled = int(take.sum())
-        mosaic[take] = _match_lut(hists[n], pooled)[warped[take]]
-        del warped
-        print(f"    {n}: +{100 * filled / mosaic.size:.1f}% of window ({time.time() - t0:.0f}s)")
-        if filled:
-            used.append(n)
-    coverage = float((mosaic > 0).mean())
-
+    luts = {n: _match_lut(hists[n], pooled) for n, _ in sources}
+    filled_px = {n: 0 for n, _ in sources}
+    valid_px = 0
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_suffix(".tmp.tif")
     profile = dict(driver="GTiff", width=width, height=height, count=1, dtype="uint8",
                    crs=crs, transform=transform, nodata=0, tiled=True, blockxsize=512,
                    blockysize=512, compress="deflate", predictor=2, zlevel=6, BIGTIFF="IF_SAFER")
+    t_all = time.time()
     with rasterio.open(tmp, "w", **profile) as dst:
-        dst.write(mosaic, 1)
+        handles = [(n, rasterio.open(p)) for n, p in sources]
+        try:
+            # One strip of mosaic rows at a time, with a 1-row halo above and below so the
+            # no-data rim erosion is identical to a whole-image build.
+            for r0 in range(0, height, STRIP_ROWS):
+                r1 = min(height, r0 + STRIP_ROWS)
+                h0, h1 = max(0, r0 - 1), min(height, r1 + 1)
+                st = rasterio.windows.transform(rasterio.windows.Window(0, h0, width, h1 - h0), transform)
+                strip = np.zeros((h1 - h0, width), np.uint8)
+                for n, src in handles:
+                    warped = np.zeros_like(strip)
+                    # Finer source than the mosaic (e.g. 0.25 m RED_A → 0.5 m): box average;
+                    # otherwise bilinear as before. Never sharpened.
+                    rs = Resampling.average if src.res[0] < 0.75 * res_m else Resampling.bilinear
+                    reproject(rasterio.band(src, 1), warped, src_nodata=0, dst_nodata=0,
+                              dst_transform=st, dst_crs=crs, resampling=rs)
+                    take = _erode(warped > 0) & (strip == 0)
+                    strip[take] = luts[n][warped[take]]
+                    del warped
+                core = strip[r0 - h0: r0 - h0 + (r1 - r0)]
+                dst.write(core, 1, window=rasterio.windows.Window(0, r0, width, r1 - r0))
+                valid_px += int((core > 0).sum())
+                print(f"    rows {r0}-{r1} of {height} ({time.time() - t_all:.0f}s)", flush=True)
+        finally:
+            for _, src in handles:
+                src.close()
+        print("    building overviews…", flush=True)
         dst.build_overviews([2, 4, 8, 16, 32, 64], Resampling.average)
+    # Which images contributed (a second, cheap pass at 1/16 resolution).
+    used = _contributors(sources, transform, crs, width, height)
+    with rasterio.open(tmp, "r+") as dst:
         dst.update_tags(SOURCES=",".join(used), CREDIT=CREDIT)
+    coverage = valid_px / (width * height)
     tmp.replace(out_path)
     size_mb = out_path.stat().st_size / 1e6
     print(f"  OK: {out_path} ({size_mb:.0f} MB), coverage {coverage * 100:.1f}% of the window")
@@ -165,6 +226,7 @@ def build(window=STUDY_WINDOW, res_m: float = 1.0, out_path: Path | None = None,
         "available": True,
         "mosaic": out_path.name,
         "sources": used,
+        "source_product": "HiRISE RED_A orthoimages (0.25 m/px)" if res_m < 1 else "HiRISE RED_C orthoimages (1 m/px)",
         "missing": missing,
         "bounds": {"west": lon_min, "east": lon_max, "south": lat_min, "north": lat_max},
         "resolution_m": res_m,
@@ -176,15 +238,17 @@ def build(window=STUDY_WINDOW, res_m: float = 1.0, out_path: Path | None = None,
     meta_path = out_path.parent / "metadata.json"
     if update_metadata and meta_path.exists():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        meta["ortho"] = block
+        meta[metadata_key(res_m)] = block
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-        print(f"  OK: metadata.json 'ortho' updated")
+        print(f"  OK: metadata.json '{metadata_key(res_m)}' updated")
     return block
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--res", type=float, default=1.0, help="pixel size in metres (default 1)")
+    ap.add_argument("--res", type=float, default=1.0,
+                    help="pixel size in metres (default 1; below 1 uses the RED_A orthos and writes "
+                         "ortho_mosaic_<N>cm.tif)")
     ap.add_argument("--window", type=float, nargs=4, metavar=("LON_MIN", "LON_MAX", "LAT_MIN", "LAT_MAX"),
                     default=STUDY_WINDOW, help="clip window, degrees (planetocentric, east-positive)")
     a = ap.parse_args()

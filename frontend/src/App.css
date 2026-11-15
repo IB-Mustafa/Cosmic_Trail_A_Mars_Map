@@ -516,3 +516,24 @@ button.link:hover:not(:disabled) { box-shadow: none; text-decoration: underline;
 }
 button .spinner { margin-right: 8px; vertical-align: -2px; }
 @media (max-width: 860px) { .map-loading { top: 10px; left: 10px; } }
+
+/* ---------- zoom aids: scale bar + "max HiRISE detail" chip (components/ZoomAids.tsx) ---------- */
+.map-scale {
+  position: absolute; z-index: 2; left: calc(var(--vis-left, 0px) + 12px); bottom: calc(var(--dock-h, 0px) + 32px);
+  display: flex; align-items: center; gap: 8px; pointer-events: none;
+  font-size: 11px; font-weight: 600; color: var(--text-primary); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  font-variant-numeric: tabular-nums;
+}
+.map-scale-bar {
+  height: 6px; border: 2px solid var(--text-primary); border-top: 0; border-radius: 0 0 2px 2px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.7); transition: width .15s ease;
+}
+.max-detail {
+  position: absolute; z-index: 2; bottom: calc(var(--dock-h, 0px) + 12px);
+  left: calc((100% + var(--vis-left, 0px)) / 2); transform: translate(-50%, 6px);
+  padding: 6px 12px; border-radius: 999px; font-size: 12px; color: var(--text-secondary);
+  opacity: 0; pointer-events: none; transition: opacity .25s ease, transform .25s ease;
+}
+.max-detail.on { opacity: 1; transform: translate(-50%, 0); }
+@media (max-width: 860px) { .map-scale { left: 10px; bottom: 30px; } }
+@media (prefers-reduced-motion: reduce) { .max-detail, .map-scale-bar { transition: none; } }
