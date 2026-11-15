@@ -19,7 +19,6 @@ function Pill({ on, onClick, children, disabled, title }: {
 export default function LayerControls() {
   const l = useLayerStore()
   const georef = useRouteStore(s => s.georef)
-  const terrain = useRouteStore(s => s.terrain)
   const ortho = useRouteStore(s => s.ortho)
   const hasOrtho = !!ortho?.available
   const minerals = useRouteStore(s => s.minerals)
@@ -32,7 +31,6 @@ export default function LayerControls() {
   const inArea = georef && minerals?.points
     ? minerals.points.filter(p => p.lon >= georef.west && p.lon <= georef.east && p.lat >= georef.south && p.lat <= georef.north).length
     : null
-  const has3d = !!terrain?.available
 
   return (
     <section className="glass panel" data-occludes>
@@ -121,13 +119,6 @@ export default function LayerControls() {
           <option value="elevation">Elevation</option>
           <option value="slope">Slope</option>
         </select>
-      </label>
-      <label className="slider" title={has3d
-        ? 'Stretch heights relative to the Gale floor so slopes and craters stand out. Routing always uses true heights.'
-        : terrain?.note ?? '3D terrain not available from the backend'}>
-        <span>3D Exaggeration <b>{has3d ? `${l.exaggeration.toFixed(1)}×` : 'flat'}</b></span>
-        <input type="range" min={1} max={5} step={0.5} value={l.exaggeration} disabled={!has3d}
-               onChange={e => l.setExaggeration(parseFloat(e.target.value))} />
       </label>
       {georef && (
         <details className="georef">
