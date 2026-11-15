@@ -420,19 +420,6 @@ button.link:hover:not(:disabled) { box-shadow: none; text-decoration: underline;
   .inspector { left: 8px; right: 8px; bottom: 8px; gap: 12px; font-size: 11px; overflow-x: auto; }
 }
 
-/* ---------- layer toggles with opacity sliders ---------- */
-.layer-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 10px; }
-.layer-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.layer-item .pill { width: 100%; justify-content: flex-start; }
-.layer-item .opacity { display: flex; align-items: center; gap: 6px; padding: 0 4px; }
-.layer-item .opacity input[type=range] { flex: 1; min-width: 0; height: 14px; accent-color: var(--accent-blue); }
-.layer-item:not(.on) .opacity input[type=range] { accent-color: #55627d; }
-.layer-item .opacity output {
-  width: 32px; text-align: right; font-size: 10.5px; color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-.layer-item .opacity input:disabled + output { opacity: .45; }
-
 /* ---------- route export buttons (under the elevation chart) ---------- */
 .chart-actions { display: flex; align-items: center; gap: 8px; padding-top: 6px; flex-wrap: wrap; }
 .chart-actions button { padding: 5px 12px; font-size: 12px; }

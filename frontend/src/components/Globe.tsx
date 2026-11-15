@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Cartesian2, Cartesian3, Cartographic, Color, ConstantProperty, Credit, CustomHeightmapTerrainProvider,
-  DistanceDisplayCondition, EllipsoidTerrainProvider, GeographicTilingScheme,
-  ClassificationType, HorizontalOrigin, ImageMaterialProperty, Math as CesiumMath, PinBuilder,
+  Cartesian4, DistanceDisplayCondition, EllipsoidTerrainProvider, GeographicTilingScheme,
+  ClassificationType, HorizontalOrigin, ImageMaterialProperty, Math as CesiumMath, Matrix4, PinBuilder,
   PolygonHierarchy, PolylineDashMaterialProperty,
-  Rectangle, ScreenSpaceEventType, UrlTemplateImageryProvider, VerticalOrigin,
-  type ImageryLayer, type Viewer as CesiumViewer,
+  Rectangle, ScreenSpaceEventType, Transforms, UrlTemplateImageryProvider, VerticalOrigin,
+  type ImageryLayer, type PerspectiveFrustum, type Viewer as CesiumViewer,
 } from 'cesium'
 import {
   Viewer, Entity, PolygonGraphics, PolylineGraphics, PointGraphics, BillboardGraphics, LabelGraphics,
@@ -58,8 +58,41 @@ const molaRelief = new UrlTemplateImageryProvider({
   maximumLevel: 7,
   credit: new Credit('Whole Mars relief: MGS MOLA colour shaded relief 463 m (NASA/JPL/GSFC) via NASA Mars Trek'),
 })
-// Whole planet in view, centred on Gale's longitude (the field of view fits the disc at ~2 R).
-const WHOLE_MARS_VIEW = Cartesian3.fromDegrees(GALE.lon, 12, 2.4 * MARS_RADIUS, MARS)
+// Whole Mars view: looking straight down at Gale's longitude, 12°N. The globe is placed a
+// little right of and above the canvas centre (fractions of the canvas width / height) so the
+// sidebar and the bottom bar do not cover it. The offset is a sideways camera translation
+// (what camera.moveLeft / moveDown do), never a CSS transform, so picking and hover stay exact.
+const WHOLE_MARS_SHIFT = { right: 0.065, up: 0.09 }
+const WHOLE_MARS_MIN_DIST = 3.4 * MARS_RADIUS   // from Mars' centre: the previous framing (2.4 R up)
+
+function wholeMarsCamera(v: CesiumViewer) {
+  const canvas = v.scene.canvas
+  const aspect = canvas.clientWidth / Math.max(canvas.clientHeight, 1)
+  const fov = (v.camera.frustum as PerspectiveFrustum).fov ?? CesiumMath.PI_OVER_THREE
+  // Cesium's fov is the horizontal angle on landscape canvases, the vertical one otherwise.
+  const t = Math.tan(fov / 2)
+  const tx = aspect >= 1 ? t : t * aspect
+  const ty = aspect >= 1 ? t / aspect : t
+  const { right, up } = WHOLE_MARS_SHIFT
+  // Back off only as far as needed for the shifted disc to fit (6 % margin):
+  // tan(disc half-angle) = R / sqrt(D² − R²) must stay within the shifted frame.
+  const fit = 0.94 * Math.min(ty * (1 - 2 * up), tx * (1 - 2 * right))
+  const dist = Math.max(WHOLE_MARS_MIN_DIST, MARS_RADIUS * Math.sqrt(1 + 1 / (fit * fit)))
+  const centre = Cartesian3.fromDegrees(GALE.lon, 12, 0, MARS)
+  const enu = Transforms.eastNorthUpToFixedFrame(centre, MARS)
+  const col = (i: number) => {
+    const c = Matrix4.getColumn(enu, i, new Cartesian4())
+    return new Cartesian3(c.x, c.y, c.z)
+  }
+  const [east, north, zenith] = [col(0), col(1), col(2)]
+  // Moving the camera left/down by these distances moves the planet right/up on screen.
+  const dx = 2 * right * tx * dist
+  const dy = 2 * up * ty * dist
+  const pos = Cartesian3.multiplyByScalar(zenith, dist, new Cartesian3())
+  Cartesian3.subtract(pos, Cartesian3.multiplyByScalar(east, dx, new Cartesian3()), pos)
+  Cartesian3.subtract(pos, Cartesian3.multiplyByScalar(north, dy, new Cartesian3()), pos)
+  return { destination: pos, orientation: { direction: Cartesian3.negate(zenith, new Cartesian3()), up: north } }
+}
 const LANDING_ICON = (() => {
   // Landing-site symbol: teal ring with a white centre.
   const c = document.createElement('canvas')
@@ -315,7 +348,7 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
     setView('mars')
     setPicking(null)
     closeCards()
-    viewer?.camera.flyTo({ destination: WHOLE_MARS_VIEW, duration: 2.5 })
+    if (viewer) viewer.camera.flyTo({ ...wholeMarsCamera(viewer), duration: 2.5 })
   }
   const goStudyArea = () => {
     setView('study')
