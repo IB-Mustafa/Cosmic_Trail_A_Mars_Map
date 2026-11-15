@@ -27,6 +27,9 @@ COPY --chown=app:app app/ app/
 COPY --chown=app:app scripts/ scripts/
 COPY --chown=app:app tests/ tests/
 COPY --chown=app:app conftest.py pytest.ini ./
+# The backend also serves the legacy OpenLayers page (frontend/index.html + static/, ~1 MB).
+COPY --chown=app:app frontend/index.html frontend/index.html
+COPY --chown=app:app frontend/static/ frontend/static/
 
 USER app
 # Compile the numba route search now and keep numba's cache in the image, so the

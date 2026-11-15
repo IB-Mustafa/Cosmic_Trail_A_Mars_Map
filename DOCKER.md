@@ -33,7 +33,9 @@ docker compose version
 Both should print a version (Compose **v2.20 or newer**). If you get "cannot connect to the Docker
 daemon", Docker Desktop isn't running yet.
 
-**Disk space:** about **3 GB** for the images, build cache and data.
+**Disk space:** about **4 GB** free during the first build: images ~1 GB (backend ~930 MB,
+frontend ~95 MB), data volume ~236 MB, and ~2.4 GB of build cache that you can free afterwards
+with `docker builder prune`.
 
 ## 2. Get the code
 
