@@ -27,7 +27,6 @@ export default function LayerControls() {
   const curiosity = useRouteStore(s => s.curiosityRoute)?.features[0]
   const hasGeology = !!geology?.features.length
   const hasCuriosity = !!curiosity
-  // How many detection sites fall inside the routing grid (honest context for the legend).
   const inArea = georef && minerals?.points
     ? minerals.points.filter(p => p.lon >= georef.west && p.lon <= georef.east && p.lat >= georef.south && p.lat <= georef.north).length
     : null
