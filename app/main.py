@@ -10,7 +10,7 @@ import json
 import math
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Response
@@ -534,9 +534,18 @@ class AssistantContext(BaseModel):
     dataset_id: str | None = None
 
 
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., max_length=4000)
+    topic: str | None = None      # ARIA's fine-grained topic for its answers (follow-ups use it)
+
+
 class AssistantRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=500)
     context: AssistantContext = Field(default_factory=AssistantContext)
+    # The last few messages of this browser tab's conversation, oldest first (optional; the server
+    # stores nothing). Lets ARIA resolve follow-ups like "and at night?" or "what about south?".
+    history: list[ChatTurn] = Field(default_factory=list, max_length=40)
 
 
 _MINERALS_CACHE: dict | None = None
@@ -567,7 +576,13 @@ def api_assistant_chat(req: AssistantRequest):
         validate_lonlat(lon, lat)
     except ValueError as exc:
         raise HTTPException(400, f"Invalid position: {exc}")
-    out = Assistant(ds, TERRAIN_CONTEXT, _minerals_data()).answer(req.message, lon, lat, ctx.last_route)
+    previous = None
+    last_aria = next((i for i in range(len(req.history) - 1, -1, -1)
+                      if req.history[i].role == "assistant" and req.history[i].topic), None)
+    if last_aria is not None:
+        asked = next((t.content for t in reversed(req.history[:last_aria]) if t.role == "user"), "")
+        previous = {"topic": req.history[last_aria].topic, "message": asked}
+    out = Assistant(ds, TERRAIN_CONTEXT, _minerals_data()).answer(req.message, lon, lat, ctx.last_route, previous)
     out["dataset_id"] = ds_id
     if ds.kind == "synthetic_demo":
         out["reply"] = "⚠ SYNTHETIC TERRAIN — not real Mars data. " + out["reply"]

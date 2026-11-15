@@ -155,9 +155,11 @@ async def test_weather_radiation_only_uses_rad_figure():
 
 async def test_weather_wind_and_pressure_stay_honest():
     d = _weather("What is the wind speed?")
-    assert d["intent"] == "weather"
-    assert d["confidence"] == "none"
-    assert "No wind or pressure data" in d["reply"]
+    assert d["intent"] == "weather" and d["topic"] == "wind"
+    assert d["confidence"] == "low"                    # only cited general facts, no local reading
+    assert re.search(r"(don't have|no) wind", d["reply"].lower())
+    assert "radiation" not in d["reply"].lower() and "msv" not in d["reply"].lower()   # nothing unrelated
+    assert d["reply"].split("\n")[-1].startswith("Source:")
 
 
 async def test_outside_grid_falls_back_or_declines(client):
@@ -182,18 +184,17 @@ async def test_validation_errors(client):
     assert r.status_code == 400
 
 
-async def test_replies_are_verdict_first_and_short(client):
-    """Plain-language format: verdict line, one sentence, at most 3 numbers (+ optional warning line)."""
+async def test_replies_answer_first_and_end_with_source(client):
+    """Conversational format: a direct first sentence, short paragraphs, then a "Source:" line."""
     await _require_real(client)
-    verdicts = ("✅", "⚠️", "❌", "🔬", "📍", "📏", "❓", "📚")
     for q in ("Am I safe here?", "Any hazards?", "What minerals are nearby?", "What's the elevation?",
               "Is it safe to walk north?", "How far is Mount Sharp?"):
         d = await _ask(client, q, **BRADBURY)
-        lines = d["reply"].split("\n")
-        assert lines[0].startswith(verdicts), (q, lines[0])
-        assert 2 <= len(lines) <= 4, (q, lines)
-        if len(lines) >= 3:
-            assert lines[2].count(" · ") <= 2, (q, lines[2])     # at most three key numbers
+        paras = d["reply"].split("\n\n")
+        assert paras[-1].startswith("Source: ") and "\n" not in paras[-1], (q, paras[-1])
+        assert 1 <= len(paras) - 1 <= 2, (q, paras)                # answer+reason, then tip/offer
+        first_sentence = re.split(r"(?<=[.!?])\s", paras[0])[0]
+        assert len(first_sentence.split()) <= 30, (q, first_sentence)
     d = await _ask(client, "Any hazards?", **BRADBURY)
     assert d["intent"] == "hazard"                                # plural keyword now recognised
 
@@ -219,10 +220,11 @@ async def test_is_this_safe_adds_location_context(client):
     assert d["intent"] == "slope"
     assert d["data"]["data_quality"] in ("hirise", "usgs", "mola")
     assert "loaded" in d["data"]["dunes"]
-    last = d["reply"].split("\n")[-1]
-    assert ">15° slope" in last
+    assert "15°" in d["reply"]                                            # nearest ground over the limit
     if not d["data"]["dunes"]["loaded"]:                                  # no dune boundary bundled: say so
-        assert "dune map not loaded" in last and "away from dunes" not in d["reply"]
+        assert "dune map isn't loaded" in d["reply"]
+    else:
+        assert d["data"]["dunes"]["name"] in d["reply"]
 
 
 async def test_whats_here_reports_unit_elevation_minerals_coverage(client):
@@ -246,9 +248,9 @@ async def test_best_path_to_clay_gives_direction_terrain_and_action(client):
     assert 900 < t["distance_m"] < 1400
     assert d["data"]["action"] == {"type": "set_destination", "lon": YKB[0], "lat": YKB[1], "label": "Yellowknife Bay"}
     assert d["data"]["terrain_between"]["sampled"] > 100
-    assert d["reply"].startswith("🧭 Yellowknife Bay is") and "km NE" in d["reply"].split("\n")[0]
+    assert d["reply"].startswith("Yellowknife Bay is about") and "km north-east" in d["reply"].split(". ")[0]
     at = await _ask(client, "Best path to clay?", current_lon=YKB[0], current_lat=YKB[1])
-    assert at["reply"].startswith("🔬 You're at Yellowknife Bay")
+    assert at["reply"].startswith("You're at Yellowknife Bay")
 
 
 async def test_route_response_includes_location_context(client):

@@ -1,12 +1,25 @@
 // ARIA — Astronaut Route Intelligence Assistant.
-// Rule-based and offline (app/assistant.py): answers come from the terrain grid, the last
-// route, bundled mineral sites and cited science cards — no language model.
+// Rule-based and offline (app/assistant.py + aria_nlu.py + aria_templates.py): answers come from
+// the terrain grid, the last route, bundled mineral sites, cited science cards and published
+// facts — no language model. The last few messages are sent with each question so ARIA can
+// follow up ("and at night?", "what about south?"); nothing is stored on the server.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
-import { askAssistant, routeSummary, type AssistantAction, type AssistantReply } from '../api/cosmic'
+import { askAssistant, routeSummary, type AssistantAction, type AssistantReply, type ChatTurn } from '../api/cosmic'
 import { useRouteStore } from '../store/routeStore'
 import { getMapCenter } from './Globe'
 
-interface Msg { role: 'aria' | 'user'; text: string; reply?: AssistantReply }
+/** `local`: a note from the app itself (greeting, "B set…", errors), not sent back as conversation. */
+interface Msg { role: 'aria' | 'user'; text: string; reply?: AssistantReply; local?: boolean }
+
+const HISTORY_TURNS = 6   // earlier messages sent with each question
+
+/** Reply text → paragraphs, with the final "Source: …" line split off. */
+function splitReply(text: string): { paras: string[]; source: string | null } {
+  const paras = text.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean)
+  const last = paras[paras.length - 1]
+  if (last?.startsWith('Source:')) return { paras: paras.slice(0, -1), source: last.slice('Source:'.length).trim() }
+  return { paras, source: null }
+}
 
 const GREETING =
   "Hello! I'm ARIA — your Astronaut Route Intelligence Assistant. I'm analysing terrain data for Gale Crater. " +
@@ -23,7 +36,10 @@ function badges(source: string): string[] {
   if (s.includes('mola')) out.push('🛰 MOLA')
   if (s.includes('crism')) out.push('🔬 CRISM/OMEGA Data')
   if (s.includes('route')) out.push('🧭 Route result')
-  if (s.includes('curiosity') || s.includes('science card') || s.includes('published')) out.push('📚 Published studies')
+  if (s.includes('curiosity') || s.includes('science card') || s.includes('published') || s.includes('pia16913')
+      || s.includes('hassler')) out.push('📚 Published studies')
+  if (s.includes('general mars knowledge') || s.includes('mars fact sheet') || s.includes('opportunity mission'))
+    out.push('🌍 General Mars facts')
   return out.length ? out : ['ℹ No data source']
 }
 
@@ -69,7 +85,7 @@ const fmt = (lon: number, lat: number) =>
 
 export default function Chatbot() {
   const [open, setOpen] = useState(false)
-  const [msgs, setMsgs] = useState<Msg[]>([{ role: 'aria', text: GREETING }])
+  const [msgs, setMsgs] = useState<Msg[]>([{ role: 'aria', text: GREETING, local: true }])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
@@ -78,7 +94,7 @@ export default function Chatbot() {
   const setDestination = (a: AssistantAction) => {
     setEnd({ lon: a.lon, lat: a.lat })
     setPickMessage({ target: 'end', kind: 'ok', text: `B set to ${a.label} (${fmt(a.lon, a.lat)}) by ARIA. Press Find Route.` })
-    setMsgs(m => [...m, { role: 'aria', text: `📍 Destination B set to ${a.label}. Press Find Route to plan the path.` }])
+    setMsgs(m => [...m, { role: 'aria', text: `📍 Destination B set to ${a.label}. Press Find Route to plan the path.`, local: true }])
   }
   const [size, setSize] = useState<Size>(loadSize)
   const drag = useRef<{ x: number; y: number; w: number; h: number } | null>(null)
@@ -121,6 +137,8 @@ export default function Chatbot() {
   const send = async (text: string) => {
     const q = text.trim()
     if (!q || busy) return
+    const history: ChatTurn[] = msgs.filter(m => !m.local).slice(-HISTORY_TURNS)
+      .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text, topic: m.reply?.topic }))
     setMsgs(m => [...m, { role: 'user', text: q }])
     setInput('')
     setBusy(true)
@@ -130,10 +148,14 @@ export default function Chatbot() {
       const reply = await askAssistant(q, {
         current_lon: center?.lon, current_lat: center?.lat, dataset_id: dataset?.id,
         last_route: route ? routeSummary(route, response?.params_used.caution_slope_deg) : null,
-      })
+      }, history)
       setMsgs(m => [...m, { role: 'aria', text: reply.reply, reply }])
     } catch (e) {
-      setMsgs(m => [...m, { role: 'aria', text: `I couldn't reach the COSMIC TRAIL backend (${(e as Error).message}).` }])
+      const msg = (e as Error).message
+      const text = /Failed to fetch|NetworkError|Load failed/i.test(msg)
+        ? "I can't reach the COSMIC TRAIL backend right now. Is it running (uvicorn app.main:app on port 8000)?"
+        : `Something went wrong on the server (${msg}). Please try again.`
+      setMsgs(m => [...m, { role: 'aria', text, local: true }])
     } finally {
       setBusy(false)
     }
@@ -163,7 +185,20 @@ export default function Chatbot() {
           <div className="aria-msgs" ref={listRef} aria-live="polite">
             {msgs.map((m, i) => (
               <div key={i} className={`aria-msg ${m.role}`}>
-                <p>{m.text}</p>
+                {(() => {
+                  const { paras, source } = m.reply ? splitReply(m.text) : { paras: [m.text], source: null }
+                  return <>
+                    {paras.map((p, j) => <p key={j}>{p}</p>)}
+                    {source && <p className="aria-source"><span>Source</span> {source}</p>}
+                  </>
+                })()}
+                {m.reply?.suggestions && m.reply.suggestions.length > 0 && i === msgs.length - 1 && (
+                  <div className="aria-suggest">
+                    {m.reply.suggestions.map(s => (
+                      <button key={s} type="button" onClick={() => send(s)} disabled={busy}>{s}</button>
+                    ))}
+                  </div>
+                )}
                 {(m.reply?.data as { action?: AssistantAction } | undefined)?.action?.type === 'set_destination' && (() => {
                   const a = (m.reply!.data as { action: AssistantAction }).action
                   return (
