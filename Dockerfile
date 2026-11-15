@@ -14,8 +14,12 @@ RUN useradd --create-home --uid 1000 app \
  && chown -R app:app /app
 WORKDIR /app
 
-# rasterio, pyproj and numba ship manylinux wheels (GDAL/PROJ/LLVM included),
-# so no system packages or compilers are needed.
+# rasterio, pyproj and numba ship manylinux wheels (GDAL/PROJ/LLVM included), so no
+# compilers are needed. rasterio's bundled GDAL still expects the system libexpat,
+# which the slim image lacks (without it the HiRISE photo layer is unavailable).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libexpat1 \
+ && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
@@ -29,6 +33,8 @@ USER app
 # container starts quickly. (If the CPU differs from the build machine, numba simply
 # recompiles at startup.)
 RUN python -c "from app.routing import warmup; warmup()"
+# Fail the build (rather than silently losing the photo layer) if rasterio can't load.
+RUN python -c "import rasterio, pyproj; print('rasterio', rasterio.__version__, 'GDAL', rasterio.__gdal_version__)"
 
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=6 \
