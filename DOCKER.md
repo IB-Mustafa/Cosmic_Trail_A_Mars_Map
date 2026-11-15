@@ -58,6 +58,12 @@ The **first** run takes a few minutes. It:
    into a Docker volume and checks its checksums,
 4. starts the backend, waits until it is healthy, then starts the frontend.
 
+> ⚠️ **Always start the app with `docker compose up`** (from the project folder), not by pressing
+> ▶ **Run** on the images in Docker Desktop. Started one by one, the containers get random names
+> and miss the shared network and the data volume: the backend logs *No datasets found* and the
+> frontend can't reach it. In Docker Desktop, the app shows up under **Containers** as the group
+> **cosmic-trail**; you can stop and start that whole group there after the first `docker compose up`.
+
 You're ready when the log shows the frontend started (and `backend-1 | ... Application startup complete`).
 
 👉 Open **http://localhost:8080**
@@ -99,6 +105,7 @@ only `down -v` deletes it.
 | Problem | Fix |
 |---------|-----|
 | `docker: command not found` / "cannot connect to the Docker daemon" | Install and **start** Docker Desktop (step 1) |
+| Containers with random names (e.g. `jolly_robinson`); backend says *No datasets found*; app says *backend is not reachable from the frontend container* | The images were started one by one (▶ Run in Docker Desktop). Delete those containers in Docker Desktop and run `docker compose up` in the project folder |
 | `Bind for 127.0.0.1:8080 failed: port is already allocated` | Something else uses 8080; use another port: `COSMIC_PORT=9000 docker compose up` |
 | `data-1 exited with code 1` / download errors | Network or proxy problem. Run `docker compose up` again: it resumes. Behind a proxy, configure it in Docker Desktop → Settings → Resources → Proxies. Rate-limited: set `HF_TOKEN` (a free Hugging Face token) before starting |
 | `dependency failed to start: container ... backend is unhealthy` | `docker compose logs backend` shows the error; usually the data is incomplete: `docker compose run --rm data python scripts/download_data.py`, then `docker compose up` |
