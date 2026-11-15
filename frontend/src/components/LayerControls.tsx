@@ -1,4 +1,4 @@
-import { useLayerStore, type HiriseStyle, type LayerId } from '../store/layerStore'
+import { useLayerStore, type HiriseStyle } from '../store/layerStore'
 import { useRouteStore } from '../store/routeStore'
 import { GAZETTEER } from '../mars'
 import { USGS_GEOLOGY_URL } from '../api/cosmic'
@@ -16,31 +16,9 @@ function Pill({ on, onClick, children, disabled, title }: {
   )
 }
 
-/** A layer toggle with its opacity slider (0–100 %) underneath. */
-function LayerItem({ id, label, on, onClick, children, disabled, title }: {
-  id: LayerId; label: string; on: boolean; onClick: () => void
-  children: React.ReactNode; disabled?: boolean; title?: string
-}) {
-  const opacity = useLayerStore(s => s.opacity[id])
-  const setOpacity = useLayerStore(s => s.setOpacity)
-  const pct = Math.round(opacity * 100)
-  return (
-    <div className={`layer-item ${on && !disabled ? 'on' : ''}`}>
-      <Pill on={on} onClick={onClick} disabled={disabled} title={title}>{children}</Pill>
-      <label className="opacity" title={`${label} opacity`}>
-        <input type="range" min={0} max={100} step={5} value={pct} disabled={disabled}
-               aria-label={`${label} opacity`} aria-valuetext={`${pct}%`}
-               onChange={e => setOpacity(id, +e.target.value / 100)} />
-        <output>{pct}%</output>
-      </label>
-    </div>
-  )
-}
-
 export default function LayerControls() {
   const l = useLayerStore()
   const georef = useRouteStore(s => s.georef)
-  const terrain = useRouteStore(s => s.terrain)
   const ortho = useRouteStore(s => s.ortho)
   const hasOrtho = !!ortho?.available
   const minerals = useRouteStore(s => s.minerals)
@@ -53,46 +31,45 @@ export default function LayerControls() {
   const inArea = georef && minerals?.points
     ? minerals.points.filter(p => p.lon >= georef.west && p.lon <= georef.east && p.lat >= georef.south && p.lat <= georef.north).length
     : null
-  const has3d = !!terrain?.available
 
   return (
     <section className="glass panel" data-occludes>
       <h2>Layers</h2>
-      <div className="pills layer-grid">
-        <LayerItem id="hirise" label="HiRISE terrain" on={l.showHiRISE} onClick={l.toggleHiRISE}>HiRISE terrain</LayerItem>
-        <LayerItem id="ortho" label="HiRISE photo" on={l.showOrtho} onClick={l.toggleOrtho} disabled={!hasOrtho}
+      <div className="pills">
+        <Pill on={l.showHiRISE} onClick={l.toggleHiRISE}>HiRISE terrain</Pill>
+        <Pill on={l.showOrtho} onClick={l.toggleOrtho} disabled={!hasOrtho}
               title={hasOrtho
                 ? `${ortho!.sources?.length ?? 0} HiRISE orthoimages merged and clipped to the study area `
                   + `(${ortho!.resolution_m} m/px, ${ortho!.credit}). Replaces the HiRISE terrain shading while on.`
                   + (ortho!.sources?.length ? '\n' + ortho!.sources.join('\n') : '')
                 : ortho?.note ?? 'HiRISE photo mosaic not available from the backend'}>
           📷 HiRISE photo
-        </LayerItem>
-        <LayerItem id="footprint" label="Routable area" on={l.showFootprint} onClick={l.toggleFootprint} disabled={!georef}
+        </Pill>
+        <Pill on={l.showFootprint} onClick={l.toggleFootprint} disabled={!georef}
               title="Dashed outline of the area the router covers (always shown while picking A/B)">
           Routable area
-        </LayerItem>
-        <LayerItem id="route" label="Route" on={l.showRoute} onClick={l.toggleRoute}>Route</LayerItem>
-        <LayerItem id="sites" label="Science sites" on={l.showSites} onClick={l.toggleSites}>Science sites</LayerItem>
-        <LayerItem id="minerals" label="Minerals" on={l.showMinerals} onClick={l.toggleMinerals} disabled={!hasMinerals}
+        </Pill>
+        <Pill on={l.showRoute} onClick={l.toggleRoute}>Route</Pill>
+        <Pill on={l.showSites} onClick={l.toggleSites}>Science sites</Pill>
+        <Pill on={l.showMinerals} onClick={l.toggleMinerals} disabled={!hasMinerals}
               title={hasMinerals ? 'Aqueous-mineral detection sites (Ehlmann & Edwards 2014; CRISM, OMEGA, THEMIS)'
                                  : minerals?.note ?? 'Mineral data not available from the backend'}>
           🔬 Minerals (CRISM/OMEGA)
-        </LayerItem>
-        <LayerItem id="labels" label="Place names" on={l.showLabels} onClick={l.toggleLabels}
+        </Pill>
+        <Pill on={l.showLabels} onClick={l.toggleLabels}
               title={`${GAZETTEER.count} official IAU/USGS names, bundled locally`}>
           Place names
-        </LayerItem>
-        <LayerItem id="geology" label="Geologic units" on={l.showGeology} onClick={l.toggleGeology} disabled={!hasGeology}
+        </Pill>
+        <Pill on={l.showGeology} onClick={l.toggleGeology} disabled={!hasGeology}
               title={hasGeology ? 'USGS geologic map units (Tanaka et al. 2014, SIM 3292) — click a unit for details'
                                 : 'Geologic units not available from the backend'}>
           🪨 Geologic Units
-        </LayerItem>
-        <LayerItem id="traverse" label="Curiosity route" on={l.showTraverse} onClick={l.toggleTraverse} disabled={!hasCuriosity}
+        </Pill>
+        <Pill on={l.showTraverse} onClick={l.toggleTraverse} disabled={!hasCuriosity}
               title={hasCuriosity ? "NASA's proposed Curiosity path up Mount Sharp — click a waypoint for details"
                                   : 'Curiosity route not available from the backend'}>
           🛸 Curiosity route
-        </LayerItem>
+        </Pill>
       </div>
       {(l.showGeology && hasGeology) || (l.showTraverse && hasCuriosity) ? (
         <div className="mineral-legend" role="group" aria-label="Reference layers legend">
@@ -142,13 +119,6 @@ export default function LayerControls() {
           <option value="elevation">Elevation</option>
           <option value="slope">Slope</option>
         </select>
-      </label>
-      <label className="slider" title={has3d
-        ? 'Stretch heights relative to the Gale floor so slopes and craters stand out. Routing always uses true heights.'
-        : terrain?.note ?? '3D terrain not available from the backend'}>
-        <span>3D Exaggeration <b>{has3d ? `${l.exaggeration.toFixed(1)}×` : 'flat'}</b></span>
-        <input type="range" min={1} max={5} step={0.5} value={l.exaggeration} disabled={!has3d}
-               onChange={e => l.setExaggeration(parseFloat(e.target.value))} />
       </label>
       {georef && (
         <details className="georef">

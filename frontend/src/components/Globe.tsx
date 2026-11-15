@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Cartesian2, Cartesian3, Cartographic, Color, ConstantProperty, Credit, CustomHeightmapTerrainProvider,
   DistanceDisplayCondition, EllipsoidTerrainProvider, GeographicTilingScheme,
@@ -22,6 +23,7 @@ import { useRouteStore } from '../store/routeStore'
 import { SITE_MAX_HEIGHT, useMarsLabels, type Reserved, type SiteLabel } from './MarsLabels'
 import { useMineralPoints, type MineralPick } from './MineralPoints'
 import Inspector from './Inspector'
+import { fitToVisible, measureMapFrame, visibleTangents } from '../mapFrame'
 
 // Terrain: flat until the backend reports 3D height tiles (no Cesium ion, no token).
 const flatTerrain = new EllipsoidTerrainProvider({ ellipsoid: MARS })
@@ -58,8 +60,15 @@ const molaRelief = new UrlTemplateImageryProvider({
   maximumLevel: 7,
   credit: new Credit('Whole Mars relief: MGS MOLA colour shaded relief 463 m (NASA/JPL/GSFC) via NASA Mars Trek'),
 })
-// Whole planet in view, centred on Gale's longitude (the field of view fits the disc at ~2 R).
-const WHOLE_MARS_VIEW = Cartesian3.fromDegrees(GALE.lon, 12, 2.4 * MARS_RADIUS, MARS)
+// Whole Mars view: straight down at Gale's longitude, 12°N, just far enough for the whole disc
+// to fit the UNCOVERED map area (src/mapFrame.ts) with a 10 % margin.
+function wholeMarsCamera(v: CesiumViewer) {
+  const { tx, ty } = visibleTangents(v)
+  const fit = 0.9 * Math.min(tx, ty)
+  // tan(disc half-angle) = R / sqrt(D² − R²) must stay within the uncovered area.
+  const dist = MARS_RADIUS * Math.sqrt(1 + 1 / (fit * fit))
+  return { destination: Cartesian3.fromDegrees(GALE.lon, 12, dist - MARS_RADIUS, MARS) }
+}
 const LANDING_ICON = (() => {
   // Landing-site symbol: teal ring with a white centre.
   const c = document.createElement('canvas')
@@ -83,7 +92,12 @@ const LANDING_LABEL_OFFSET = new Cartesian2(14, 0)
 // Initial camera: lon, lat, altitude (m) — over Gale Crater, 50 km up.
 const START_VIEW = [137.4, -4.6, 50_000] as const
 // "Go to Gale Crater": centred on the IAU crater centre, high enough to frame the 154 km crater.
-const GALE_VIEW = Cartesian3.fromDegrees(GALE.lon, GALE.lat, GALE.d * 1000 * 2.2, MARS)
+const GALE_RECT = (() => {
+  // The whole 154 km crater plus a 15 % margin, as a lon/lat box (framed by fitToVisible).
+  const halfLat = CesiumMath.toDegrees((GALE.d * 1000 / 2) * 1.15 / MARS_RADIUS)
+  const halfLon = halfLat / Math.cos(CesiumMath.toRadians(GALE.lat))
+  return Rectangle.fromDegrees(GALE.lon - halfLon, GALE.lat - halfLat, GALE.lon + halfLon, GALE.lat + halfLat)
+})()
 
 const pins = new PinBuilder()
 // Theme: blue = start (A), pink = destination (B) / terrain-safe route, red dashed = shortest route, purple = science sites.
@@ -132,7 +146,9 @@ const DEFAULT_MAX_SLOPE = 15
 const CURIOSITY_GOLD = Color.fromCssColorString('#ffcc4d')
 const CURIOSITY_GAP = Color.fromCssColorString('#0a0e1a').withAlpha(0.85)
 const WAYPOINT_LABEL_OFFSET = new Cartesian2(10, 0)
-const WAYPOINT_LABEL_DDC = new DistanceDisplayCondition(0, 60_000)
+// 100 km: the study-area view sits at ~64 km now that the viewer box overhangs the window
+// (same on-screen scale as the earlier 40 km view), and the names should show there.
+const WAYPOINT_LABEL_DDC = new DistanceDisplayCondition(0, 100_000)
 // USGS geologic units: semi-transparent fills (eHt blue-grey, Htu brown).
 const GEO_UNIT_COLORS: Record<string, string> = { eHt: '#7f93ad', Htu: '#8b5a2b' }
 export const geoUnitColor = (p: GeologicUnitProps) => GEO_UNIT_COLORS[p.unit] ?? p.color ?? '#999999'
@@ -227,6 +243,9 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
   const [unitCard, setUnitCard] = useState<GeologicUnitProps | null>(null)
   const [waypointCard, setWaypointCard] = useState<CuriosityWaypoint | null>(null)
   const [landingCard, setLandingCard] = useState<LandingSite | null>(null)
+  // The hover-info bar lives in its own layout row under the map (App.tsx #inspector-slot).
+  const [inspectorSlot, setInspectorSlot] = useState<HTMLElement | null>(null)
+  useEffect(() => { setInspectorSlot(document.getElementById('inspector-slot')) }, [])
   const reliefRef = useRef<ImageryLayer>()
   // 'flat' or the 3D terrain in use (labels use it to enable terrain-occlusion checks).
   const [terrainKey, setTerrainKey] = useState('flat')
@@ -300,28 +319,61 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
     setViewer(v)
   })
 
+  // ---------- map frame: viewer box centred on the area not covered by panels ----------
+  useEffect(() => {
+    if (!viewer) return
+    const update = () => { measureMapFrame(); if (!viewer.isDestroyed()) viewer.resize() }
+    update()
+    const ro = new ResizeObserver(update)
+    for (const sel of ['.globe', '.sidebar', '.dock']) {
+      const el = document.querySelector(sel)
+      if (el) ro.observe(el)
+    }
+    window.addEventListener('resize', update)
+    return () => { ro.disconnect(); window.removeEventListener('resize', update) }
+  }, [viewer])
+
   const flyToGale = () => {
-    viewer?.camera.flyTo({ destination: GALE_VIEW, duration: 2 })
+    viewer?.camera.flyTo({ destination: fitToVisible(GALE_RECT), duration: 2 })
     showCard('gale')
   }
   const flyToStudyArea = () => {
-    if (viewer && rect) viewer.camera.flyTo({ destination: rect, duration: 1.5 })
+    if (viewer && rect) viewer.camera.flyTo({ destination: fitToVisible(rect), duration: 1.5 })
   }
 
   // ---------- top-bar tabs: Gale study area / Whole Mars ----------
   const { view, setView } = layers
   useEffect(() => { if (reliefRef.current) reliefRef.current.show = view === 'mars' }, [viewer, view])
+  // Switching views changes the uncovered area (the elevation panel comes and goes), so each
+  // view's camera target is computed once the new layout is applied: after React commits the
+  // view change, the map frame is re-measured, Cesium picks up the new size, then it flies.
+  const pendingFly = useRef<(() => void) | null>(null)
+  const flyAfterLayout = (next: typeof view, fly: (v: CesiumViewer) => void) => {
+    if (!viewer) return
+    const run = () => { if (!viewer.isDestroyed()) { measureMapFrame(); viewer.resize(); fly(viewer) } }
+    if (next === view) run()                 // same view: the layout does not change
+    else pendingFly.current = run
+  }
+  useEffect(() => {
+    const run = pendingFly.current
+    if (!run) return
+    pendingFly.current = null
+    const id = requestAnimationFrame(run)
+    return () => cancelAnimationFrame(id)
+  }, [view])
   const goWholeMars = () => {
     setView('mars')
     setPicking(null)
     closeCards()
-    viewer?.camera.flyTo({ destination: WHOLE_MARS_VIEW, duration: 2.5 })
+    flyAfterLayout('mars', v => v.camera.flyTo({ ...wholeMarsCamera(v), duration: 2.5 }))
   }
   const goStudyArea = () => {
     setView('study')
     closeCards()
-    if (viewer && rect) viewer.camera.flyTo({ destination: rect, duration: 2.5 })
-    else viewer?.camera.flyTo({ destination: Cartesian3.fromDegrees(...START_VIEW, MARS), duration: 2.5 })
+    flyAfterLayout('study', v => {
+      if (rect) v.camera.flyTo({ destination: fitToVisible(rect), duration: 2.5 })
+      else v.camera.flyTo({ destination: Cartesian3.fromDegrees(...START_VIEW, MARS), duration: 2.5 })
+    })
   }
 
   // ---------- HiRISE ortho photo mosaic (imagery tiles from the backend, toggled) ----------
@@ -352,7 +404,7 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
   useEffect(() => { if (orthoLayer) orthoLayer.show = layers.showOrtho }, [orthoLayer, layers.showOrtho])
   useEffect(() => { if (orthoLayer) orthoLayer.alpha = op.ortho }, [orthoLayer, op.ortho])
   const flyToOrtho = () => {
-    if (viewer && orthoRect) viewer.camera.flyTo({ destination: orthoRect, duration: 1.5 })
+    if (viewer && orthoRect) viewer.camera.flyTo({ destination: fitToVisible(orthoRect), duration: 1.5 })
   }
 
   // ---------- 3D terrain + vertical exaggeration ----------
@@ -502,7 +554,7 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
     <>
       <Viewer
         ref={ref}
-        full
+        className="cesium-host"
         terrainProvider={flatTerrain}
         baseLayer={false}
         baseLayerPicker={false}
@@ -640,7 +692,7 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
         ))}
       </Viewer>
 
-      <Inspector viewer={viewer} />
+      {inspectorSlot && createPortal(<Inspector viewer={viewer} />, inspectorSlot)}
       {/* Globe tools (top-right) */}
       <div className="globe-tools" data-occludes>
         <div className="view-tabs" role="tablist" aria-label="Map view">
