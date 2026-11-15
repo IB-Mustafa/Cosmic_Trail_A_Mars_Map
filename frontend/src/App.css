@@ -4,7 +4,12 @@
   --bg-primary: #0a0e1a;
   --bg-secondary: #0f1629;
   --bg-card: #131d35;
-  --glass: rgba(13, 25, 54, 0.85);
+  /* Frosted glass panels over the full-bleed map: tune transparency here. */
+  --glass-bg: rgba(10, 14, 30, 0.72);
+  --glass-blur: blur(14px) saturate(140%);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-shadow: 0 12px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --glass: var(--glass-bg);
   --accent-blue: #4a9eff;
   --accent-pink: #ff4d8d;
   --accent-purple: #7c3aed;
@@ -30,25 +35,38 @@ body { background: var(--bg-primary); color: var(--text-primary); overflow: hidd
 * { scrollbar-width: thin; scrollbar-color: rgba(74, 158, 255, 0.35) transparent; }
 
 /* ---------- layout: full-bleed globe, floating glass cards ---------- */
-.app { position: relative; height: 100%; }
-.globe {
+/* The map fills the window behind the panels. The viewer element is sized/positioned by
+   src/mapFrame.ts so its centre is the centre of the uncovered area (it overhangs the window,
+   which clips it); --map-* fall back to filling the map region. */
+.app { position: relative; height: 100%; overflow: hidden; }
+.globe { position: absolute; inset: 0; z-index: 0; overflow: hidden; }
+.cesium-host {
   position: absolute;
-  inset: 0;
-  transform: translate(160px, -73px);
+  left: var(--map-x, 0px); top: var(--map-y, 0px);
+  width: var(--map-w, 100%); height: var(--map-h, 100%);
 }
+/* Panels take clicks and scrolling; the gaps between them pass events to the map. */
+.dock {
+  position: absolute; z-index: 2; left: 372px; right: 16px; bottom: 16px;
+  display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none;
+}
+.dock > *, .sidebar > * { pointer-events: auto; }
+.inspector-slot { min-width: 0; }
 
 .glass {
-  background: var(--glass);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid var(--border);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: var(--glass-shadow);
 }
 
 .sidebar {
   position: absolute; z-index: 2;
   top: 16px; left: 16px; bottom: 16px;
+  pointer-events: none;
   width: 340px;
   display: flex; flex-direction: column; gap: 12px;
   overflow-y: auto;
@@ -56,8 +74,7 @@ body { background: var(--bg-primary); color: var(--text-primary); overflow: hidd
 }
 
 .bottom {
-  position: absolute; z-index: 2;
-  left: 372px; right: 16px; bottom: 16px;
+  position: relative; z-index: 2;
   height: 240px;
   padding: 14px 18px 8px;
 }
@@ -220,34 +237,35 @@ fieldset button.active { background: var(--accent-pink); border-color: var(--acc
 .recharts-tooltip-wrapper { outline: none; }
 
 /* ---------- Cesium chrome ---------- */
-.cesium-viewer-bottom { left: 384px !important; right: auto !important; bottom: 300px !important; opacity: .55; }
+/* Attribution: bottom-left of the uncovered area (the viewer box overhangs the window). */
+.cesium-viewer-bottom {
+  position: fixed !important; left: calc(var(--vis-left, 0px) + 8px) !important; right: auto !important;
+  bottom: calc(var(--dock-h, 0px) + 6px) !important; opacity: .55;
+}
 .cesium-widget-credits { filter: grayscale(1) brightness(1.4); }
 .cesium-viewer { background: var(--bg-primary); }
 
 /* ---------- small screens: stack ---------- */
 @media (max-width: 860px) {
   body { overflow: auto; }
-  .app { display: flex; flex-direction: column; height: auto; min-height: 100%; }
+  .app { display: flex; flex-direction: column; height: auto; min-height: 100%; overflow: visible; }
   .globe { position: relative; height: 55vh; }
-  .sidebar, .bottom { position: static; width: auto; margin: 12px 16px 0; }
-  .sidebar { overflow: visible; }
-  .bottom { margin-bottom: 16px; }
-  .cesium-viewer-bottom { bottom: 44px !important; }
-  .globe {
-  transform: none;
-}
+  .sidebar, .dock { position: static; width: auto; margin: 12px 16px 0; pointer-events: auto; }
+  .dock { order: 1; }
+  .sidebar { order: 2; overflow: visible; margin-bottom: 16px; }
+  .cesium-viewer-bottom { position: absolute !important; left: 8px !important; bottom: 6px !important; }
 }
 
 /* ---------- globe tools, pick banner, info card ---------- */
 .globe-tools { position: absolute; z-index: 2; top: 16px; right: 16px; display: flex; gap: 8px; }
 .glass-btn {
-  background: rgba(13, 25, 54, 0.85); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  background: var(--glass-bg); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid rgba(74, 158, 255, 0.45); color: var(--text-primary);
   box-shadow: var(--glow-blue);
 }
 .glass-btn.ghost { border-color: var(--border); box-shadow: none; }
 .pick-banner {
-  position: absolute; z-index: 2; top: 16px; left: 50%; transform: translateX(-50%);
+  position: absolute; z-index: 2; top: 16px; left: calc((100% + var(--vis-left, 0px)) / 2); transform: translateX(-50%);
   padding: 10px 16px; font-size: 13px; display: flex; align-items: center; gap: 12px;
   border-color: rgba(74, 158, 255, 0.6); box-shadow: var(--glow-blue);
 }
@@ -285,12 +303,6 @@ button.link:hover:not(:disabled) { box-shadow: none; text-decoration: underline;
   .pick-banner { top: 56px; width: calc(100% - 20px); }
 }
 
-/* 3D exaggeration slider */
-.slider { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; font-size: 12px; color: var(--text-secondary); }
-.slider span { display: flex; justify-content: space-between; }
-.slider b { color: var(--text-primary); font-family: var(--font-display); font-variant-numeric: tabular-nums; }
-.slider input[type=range] { width: 100%; accent-color: var(--accent-blue); }
-
 /* minerals legend + info-card swatch */
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; box-shadow: 0 0 0 1.5px #0a0e1a, 0 0 0 2.5px rgba(232, 240, 255, 0.35); }
 .mineral-legend { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: rgba(10, 14, 26, 0.45); font-size: 12px; }
@@ -303,7 +315,7 @@ button.link:hover:not(:disabled) { box-shadow: none; text-decoration: underline;
 
 /* ---------- ARIA assistant ---------- */
 .aria-fab {
-  position: absolute; z-index: 3; right: 16px; bottom: 292px;
+  position: absolute; z-index: 3; right: 16px; bottom: calc(var(--dock-h, 0px) + 40px);
   padding: 10px 18px; border-radius: 999px;
   font-family: var(--font-display); font-weight: 700; letter-spacing: 0.06em;
   background: linear-gradient(135deg, #4a9eff, #7c3aed 55%, #ff4d8d);
@@ -311,7 +323,9 @@ button.link:hover:not(:disabled) { box-shadow: none; text-decoration: underline;
 }
 .aria-fab.open { outline: 2px solid rgba(232, 240, 255, 0.6); outline-offset: 2px; }
 .aria-panel {
-  position: absolute; z-index: 3; right: 16px; bottom: 344px;
+  position: absolute; z-index: 3; right: 16px; bottom: calc(var(--dock-h, 0px) + 92px);
+  /* Stay inside the uncovered map area, below the top-bar tabs. */
+  max-height: calc(100% - var(--dock-h, 0px) - 92px - 64px);
   /* Size set by Chatbot.tsx (drag handle, saved in localStorage): 300×200 to 600×500. */
   width: var(--aria-w, 380px); height: var(--aria-h, 420px);
   display: flex; flex-direction: column; overflow: hidden;
@@ -369,15 +383,12 @@ button.link:hover:not(:disabled) { box-shadow: none; text-decoration: underline;
 .raw-images-btn:hover { background: rgba(74, 158, 255, 0.2); box-shadow: var(--glow-blue); }
 /* Mars Trek basemap attribution: bottom-right of the map, just above the elevation panel. */
 .trek-credit {
-  position: absolute; z-index: 2; right: 16px; bottom: 302px;
+  position: absolute; z-index: 2; right: 8px; bottom: calc(var(--dock-h, 0px) + 8px);
   padding: 3px 8px; border-radius: 6px; font-size: 10.5px; line-height: 1.3;
   color: var(--text-secondary); text-decoration: none;
   background: rgba(10, 14, 26, 0.7); border: 1px solid var(--border);
 }
 .trek-credit:hover { color: var(--text-primary); text-decoration: underline; }
-@media (max-width: 860px) {
-  .trek-credit { bottom: 46px; right: 8px; }
-}
 
 /* ---------- shortest vs terrain-safe comparison ---------- */
 .route-key { display: inline-block; width: 22px; height: 0; margin-left: 6px; vertical-align: 4px; }
@@ -408,11 +419,11 @@ button.link:hover:not(:disabled) { box-shadow: none; text-decoration: underline;
 
 /* ---------- bottom inspector bar (cursor lon/lat + layer values) ---------- */
 .inspector {
-  position: absolute; z-index: 2; left: 372px; right: 16px; bottom: 264px;
+  position: relative; z-index: 2;
   height: 30px; padding: 0 14px; border-radius: 10px;
   display: flex; align-items: center; gap: 18px;
   font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums;
-  white-space: nowrap; overflow: hidden; pointer-events: none;
+  white-space: nowrap; overflow: hidden;
 }
 .inspector b { color: var(--text-primary); font-weight: 600; }
 .inspector small { color: var(--text-secondary); font-size: 10.5px; }
@@ -424,21 +435,8 @@ button.link:hover:not(:disabled) { box-shadow: none; text-decoration: underline;
 .inspector .muted, .inspector .hint { color: var(--text-secondary); }
 .inspector > span { overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 860px) {
-  .inspector { left: 8px; right: 8px; bottom: 8px; gap: 12px; font-size: 11px; overflow-x: auto; }
+  .inspector { gap: 12px; font-size: 11px; overflow-x: auto; }
 }
-
-/* ---------- layer toggles with opacity sliders ---------- */
-.layer-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 10px; }
-.layer-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.layer-item .pill { width: 100%; justify-content: flex-start; }
-.layer-item .opacity { display: flex; align-items: center; gap: 6px; padding: 0 4px; }
-.layer-item .opacity input[type=range] { flex: 1; min-width: 0; height: 14px; accent-color: var(--accent-blue); }
-.layer-item:not(.on) .opacity input[type=range] { accent-color: #55627d; }
-.layer-item .opacity output {
-  width: 32px; text-align: right; font-size: 10.5px; color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-.layer-item .opacity input:disabled + output { opacity: .45; }
 
 /* ---------- route export buttons (under the elevation chart) ---------- */
 .chart-actions { display: flex; align-items: center; gap: 8px; padding-top: 6px; flex-wrap: wrap; }
@@ -448,8 +446,8 @@ button.link:hover:not(:disabled) { box-shadow: none; text-decoration: underline;
 /* ---------- top-bar view tabs + Whole Mars view ---------- */
 .view-tabs {
   display: inline-flex; padding: 3px; gap: 2px; border-radius: 12px;
-  background: rgba(13, 25, 54, 0.85); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-  border: 1px solid var(--border);
+  background: var(--glass-bg); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border); box-shadow: var(--glass-shadow);
 }
 .view-tabs button {
   background: none; border: 0; box-shadow: none; padding: 6px 12px; border-radius: 9px;
@@ -457,12 +455,8 @@ button.link:hover:not(:disabled) { box-shadow: none; text-decoration: underline;
 }
 .view-tabs button.on { background: rgba(74, 158, 255, 0.22); color: var(--text-primary); box-shadow: var(--glow-blue); }
 .view-tabs button:hover:not(.on) { color: var(--text-primary); box-shadow: none; }
-/* Without the route panel and elevation chart, the bar and credits drop to the bottom. */
-.app.view-mars .inspector { bottom: 16px; }
-.app.view-mars .trek-credit { bottom: 54px; }
-.app.view-mars .cesium-viewer-bottom { bottom: 52px !important; }
 .mars-legend {
-  position: absolute; z-index: 2; left: 372px; bottom: 56px;
+  position: absolute; z-index: 2; left: calc(var(--vis-left, 0px) + 12px); bottom: calc(var(--dock-h, 0px) + 36px);
   display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; font-size: 11.5px; color: var(--text-secondary);
 }
 .mars-legend strong { font-family: var(--font-display); color: var(--text-primary); font-size: 13px; }
@@ -472,6 +466,5 @@ button.link:hover:not(:disabled) { box-shadow: none; text-decoration: underline;
 .landing-dot { width: 10px; height: 10px; border-radius: 50%; background: #2dd4bf; box-shadow: 0 0 0 2px #0a0e1a; }
 @media (max-width: 860px) {
   .view-tabs button { padding: 5px 9px; font-size: 11.5px; }
-  .mars-legend { left: 8px; bottom: 48px; }
-  .app.view-mars .inspector { bottom: 8px; }
+  .mars-legend { left: 8px; }
 }

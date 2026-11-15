@@ -1,4 +1,3 @@
-
 import { useLayerStore, type HiriseStyle } from '../store/layerStore'
 import { useRouteStore } from '../store/routeStore'
 import { GAZETTEER } from '../mars'
@@ -14,23 +13,6 @@ function Pill({ on, onClick, children, disabled, title }: {
             onClick={onClick} disabled={disabled} title={title}>
       {children}
     </button>
-  )
-}
-
-/** A layer toggle without an opacity slider. */
-function LayerItem({ on, onClick, children, disabled, title }: {
-  on: boolean
-  onClick: () => void
-  children: React.ReactNode
-  disabled?: boolean
-  title?: string
-}) {
-  return (
-    <div className={`layer-item ${on && !disabled ? 'on' : ''}`}>
-      <Pill on={on} onClick={onClick} disabled={disabled} title={title}>
-        {children}
-      </Pill>
-    </div>
   )
 }
 
@@ -52,41 +34,41 @@ export default function LayerControls() {
   return (
     <section className="glass panel" data-occludes>
       <h2>Layers</h2>
-      <div className="pills layer-grid">
-        <LayerItem on={l.showHiRISE} onClick={l.toggleHiRISE}>HiRISE terrain</LayerItem>
-        <LayerItem on={l.showOrtho} onClick={l.toggleOrtho} disabled={!hasOrtho}
+      <div className="pills">
+        <Pill on={l.showHiRISE} onClick={l.toggleHiRISE}>HiRISE terrain</Pill>
+        <Pill on={l.showOrtho} onClick={l.toggleOrtho} disabled={!hasOrtho}
               title={hasOrtho
                 ? `${ortho!.sources?.length ?? 0} HiRISE orthoimages merged and clipped to the study area `
                   + `(${ortho!.resolution_m} m/px, ${ortho!.credit}). Replaces the HiRISE terrain shading while on.`
                   + (ortho!.sources?.length ? '\n' + ortho!.sources.join('\n') : '')
                 : ortho?.note ?? 'HiRISE photo mosaic not available from the backend'}>
           📷 HiRISE photo
-        </LayerItem>
-        <LayerItem on={l.showFootprint} onClick={l.toggleFootprint} disabled={!georef}
+        </Pill>
+        <Pill on={l.showFootprint} onClick={l.toggleFootprint} disabled={!georef}
               title="Dashed outline of the area the router covers (always shown while picking A/B)">
           Routable area
-        </LayerItem>
-        <LayerItem on={l.showRoute} onClick={l.toggleRoute}>Route</LayerItem>
-        <LayerItem on={l.showSites} onClick={l.toggleSites}>Science sites</LayerItem>
-        <LayerItem on={l.showMinerals} onClick={l.toggleMinerals} disabled={!hasMinerals}
+        </Pill>
+        <Pill on={l.showRoute} onClick={l.toggleRoute}>Route</Pill>
+        <Pill on={l.showSites} onClick={l.toggleSites}>Science sites</Pill>
+        <Pill on={l.showMinerals} onClick={l.toggleMinerals} disabled={!hasMinerals}
               title={hasMinerals ? 'Aqueous-mineral detection sites (Ehlmann & Edwards 2014; CRISM, OMEGA, THEMIS)'
                                  : minerals?.note ?? 'Mineral data not available from the backend'}>
           🔬 Minerals (CRISM/OMEGA)
-        </LayerItem>
-        <LayerItem on={l.showLabels} onClick={l.toggleLabels}
+        </Pill>
+        <Pill on={l.showLabels} onClick={l.toggleLabels}
               title={`${GAZETTEER.count} official IAU/USGS names, bundled locally`}>
           Place names
-        </LayerItem>
-        <LayerItem on={l.showGeology} onClick={l.toggleGeology} disabled={!hasGeology}
+        </Pill>
+        <Pill on={l.showGeology} onClick={l.toggleGeology} disabled={!hasGeology}
               title={hasGeology ? 'USGS geologic map units (Tanaka et al. 2014, SIM 3292) — click a unit for details'
                                 : 'Geologic units not available from the backend'}>
           🪨 Geologic Units
-        </LayerItem>
-        <LayerItem on={l.showTraverse} onClick={l.toggleTraverse} disabled={!hasCuriosity}
+        </Pill>
+        <Pill on={l.showTraverse} onClick={l.toggleTraverse} disabled={!hasCuriosity}
               title={hasCuriosity ? "NASA's proposed Curiosity path up Mount Sharp — click a waypoint for details"
                                   : 'Curiosity route not available from the backend'}>
           🛸 Curiosity route
-        </LayerItem>
+        </Pill>
       </div>
       {(l.showGeology && hasGeology) || (l.showTraverse && hasCuriosity) ? (
         <div className="mineral-legend" role="group" aria-label="Reference layers legend">

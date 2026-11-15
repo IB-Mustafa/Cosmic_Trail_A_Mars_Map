@@ -44,6 +44,8 @@ export default function App() {
 
   return (
     <div className={`app view-${view}`}>
+      {/* Full-bleed map behind floating glass panels. Views are centred in the area the
+          panels leave uncovered (src/mapFrame.ts). */}
       <div className="globe"><Globe sites={sites} /></div>
       <aside className="sidebar">
         <header className="glass brand" data-occludes>
@@ -57,7 +59,11 @@ export default function App() {
         {view === 'study' && <RoutePanel />}
         <LayerControls />
       </aside>
-      {view === 'study' && <section className="glass bottom" data-occludes><ElevationChart /></section>}
+      {/* Bottom dock: hover-info bar + elevation panel (study view only). */}
+      <div className="dock">
+        <div id="inspector-slot" className="inspector-slot" />
+        {view === 'study' && <section className="glass bottom" data-occludes><ElevationChart /></section>}
+      </div>
       <Chatbot />
     </div>
   )

@@ -116,6 +116,10 @@ export function useMarsLabels(
       const placed: Box[] = []
       // UI panels floating over the globe.
       const canvasRect = scene.canvas.getBoundingClientRect()
+      // On-screen part of the canvas (the viewer box may overhang the window).
+      const vx0 = Math.max(0, -canvasRect.left), vy0 = Math.max(0, -canvasRect.top)
+      const vx1 = Math.min(width, window.innerWidth - canvasRect.left)
+      const vy1 = Math.min(height, window.innerHeight - canvasRect.top)
       document.querySelectorAll('[data-occludes]').forEach(el => {
         const b = el.getBoundingClientRect()
         if (b.width && b.height) placed.push({ x0: b.left - canvasRect.left, x1: b.right - canvasRect.left, y0: b.top - canvasRect.top, y1: b.bottom - canvasRect.top })
@@ -145,7 +149,7 @@ export function useMarsLabels(
             it.label.position = Cartesian3.fromRadians(it.carto.longitude, it.carto.latitude, gh, MARS)
           }
           const p = it.label.computeScreenSpacePosition(scene, scratch)
-          if (p && p.x - it.w / 2 > 0 && p.y - it.h / 2 > 0 && p.x + it.w / 2 < width && p.y + it.h / 2 < height &&
+          if (p && p.x - it.w / 2 > vx0 && p.y - it.h / 2 > vy0 && p.x + it.w / 2 < vx1 && p.y + it.h / 2 < vy1 &&
               !(is3d && h < 1_000_000 && occluded(it))) {
             const cy = p.y
             const box = { x0: p.x - it.w / 2 - PAD, x1: p.x + it.w / 2 + PAD, y0: cy - it.h / 2 - PAD, y1: cy + it.h / 2 + PAD }
