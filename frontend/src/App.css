@@ -31,7 +31,11 @@ body { background: var(--bg-primary); color: var(--text-primary); overflow: hidd
 
 /* ---------- layout: full-bleed globe, floating glass cards ---------- */
 .app { position: relative; height: 100%; }
-.globe { position: absolute; inset: 0; }
+.globe {
+  position: absolute;
+  inset: 0;
+  transform: translate(160px, -73px);
+}
 
 .glass {
   background: var(--glass);
@@ -229,6 +233,9 @@ fieldset button.active { background: var(--accent-pink); border-color: var(--acc
   .sidebar { overflow: visible; }
   .bottom { margin-bottom: 16px; }
   .cesium-viewer-bottom { bottom: 44px !important; }
+  .globe {
+  transform: none;
+}
 }
 
 /* ---------- globe tools, pick banner, info card ---------- */

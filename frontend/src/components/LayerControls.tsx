@@ -16,32 +16,27 @@ function Pill({ on, onClick, children, disabled, title }: {
   )
 }
 
-/** A layer toggle with its opacity slider (0–100 %) underneath. */
-function LayerItem({ id, label, on, onClick, children, disabled, title }: {
-  id: LayerId; label: string; on: boolean; onClick: () => void
-  children: React.ReactNode; disabled?: boolean; title?: string
+/** A layer toggle without an opacity slider. */
+function LayerItem({ on, onClick, children, disabled, title }: {
+  on: boolean
+  onClick: () => void
+  children: React.ReactNode
+  disabled?: boolean
+  title?: string
 }) {
-  const opacity = useLayerStore(s => s.opacity[id])
-  const setOpacity = useLayerStore(s => s.setOpacity)
-  const pct = Math.round(opacity * 100)
   return (
     <div className={`layer-item ${on && !disabled ? 'on' : ''}`}>
-      <Pill on={on} onClick={onClick} disabled={disabled} title={title}>{children}</Pill>
-      <label className="opacity" title={`${label} opacity`}>
-        <input type="range" min={0} max={100} step={5} value={pct} disabled={disabled}
-               aria-label={`${label} opacity`} aria-valuetext={`${pct}%`}
-               onChange={e => setOpacity(id, +e.target.value / 100)} />
-        <output>{pct}%</output>
-      </label>
+      <Pill on={on} onClick={onClick} disabled={disabled} title={title}>
+        {children}
+      </Pill>
     </div>
   )
 }
-
 export default function LayerControls() {
   const l = useLayerStore()
-  const dataset = useRouteStore(s => s.dataset)
+
   const georef = useRouteStore(s => s.georef)
-  const terrain = useRouteStore(s => s.terrain)
+ 
   const ortho = useRouteStore(s => s.ortho)
   const hasOrtho = !!ortho?.available
   const minerals = useRouteStore(s => s.minerals)
@@ -54,8 +49,8 @@ export default function LayerControls() {
   const inArea = georef && minerals?.points
     ? minerals.points.filter(p => p.lon >= georef.west && p.lon <= georef.east && p.lat >= georef.south && p.lat <= georef.north).length
     : null
-  const has3d = !!terrain?.available
-  const fillPct = ((dataset?.fill_fraction ?? 0) * 100).toFixed(1)
+
+
 
   return (
     <section className="glass panel" data-occludes>
@@ -70,12 +65,7 @@ export default function LayerControls() {
                 : ortho?.note ?? 'HiRISE photo mosaic not available from the backend'}>
           📷 HiRISE photo
         </LayerItem>
-        <LayerItem id="gapFill" label="Gap fill" on={l.showGapFill} onClick={l.toggleGapFill} disabled={!dataset?.fill_overlay}
-              title={dataset?.fill_overlay
-                ? `Blue hatching = HiRISE gaps filled from ${dataset.fill_label} (${fillPct}% of area)`
-                : 'No gap fill in this dataset'}>
-          Gap fill {dataset?.fill_overlay && <small>{fillPct}%</small>}
-        </LayerItem>
+    
         <LayerItem id="footprint" label="Routable area" on={l.showFootprint} onClick={l.toggleFootprint} disabled={!georef}
               title="Dashed outline of the area the router covers (always shown while picking A/B)">
           Routable area
@@ -151,13 +141,7 @@ export default function LayerControls() {
           <option value="slope">Slope</option>
         </select>
       </label>
-      <label className="slider" title={has3d
-        ? 'Stretch heights relative to the Gale floor so slopes and craters stand out. Routing always uses true heights.'
-        : terrain?.note ?? '3D terrain not available from the backend'}>
-        <span>3D Exaggeration <b>{has3d ? `${l.exaggeration.toFixed(1)}×` : 'flat'}</b></span>
-        <input type="range" min={1} max={5} step={0.5} value={l.exaggeration} disabled={!has3d}
-               onChange={e => l.setExaggeration(parseFloat(e.target.value))} />
-      </label>
+     
       {georef && (
         <details className="georef">
           <summary>Overlay georeference</summary>
