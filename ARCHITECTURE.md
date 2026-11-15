@@ -1,241 +1,150 @@
-# COSMIC TRAIL — Architecture
+# How COSMIC TRAIL is built
 
-## Overview
-
-COSMIC TRAIL is a single-machine, fully offline web application.  
-No data leaves your computer at runtime.
-
-```
-Browser (index.html + OpenLayers)
-         │
-         │  HTTP (localhost only)
-         ▼
-FastAPI backend (Python)
-    ├── TerrainDataset  ─── analysis.npz (elevation + slope arrays)
-    ├── A* Router       ─── Horn slope, 8-connected grid
-    ├── Science cards   ─── in-memory, curated
-    ├── Mission Guide   ─── rule-based keyword lookup
-    └── SQLite          ─── data/plans.db  (saved plans)
-```
-
----
-
-## Backend (Python / FastAPI)
-
-### `app/geo.py` — Planetary geometry
-
-| Symbol | Value |
-|--------|-------|
-| `MARS_SPHERE_RADIUS_M` | 3,396,190 m (MOLA/HiRISE map-projection sphere) |
-| `MARS_MEAN_RADIUS_M` | 3,389,500 m (volumetric mean, for reference only) |
-
-**`LocalEqc(lat0, lon0, radius)`** — frozen dataclass  
-Local equidistant cylindrical projection centred on (lat0, lon0):
+COSMIC TRAIL runs on one computer: a Python backend that holds the data and does the work, and a
+web frontend that shows the globe. Apart from the NASA Mars Trek basemap tiles, nothing needs the
+internet once the data is downloaded.
 
 ```
-x = R · cos(lat₀) · (lon − lon₀) · π/180
-y = R · (lat − lat₀) · π/180
+Browser: React + TypeScript + Vite (http://127.0.0.1:5173)
+  ├─ CesiumJS globe (via Resium)    terrain, photo tiles, routes, labels
+  ├─ Zustand stores                 layers, route, picked points
+  ├─ Recharts elevation profile
+  └─ ARIA chat panel
+        │  HTTP / JSON (localhost)
+        ▼
+FastAPI backend (http://127.0.0.1:8000)
+  ├─ TerrainDataset     data/hirise_gale/analysis.npz   (5 m elevation + slope grid)
+  ├─ Router             numba-compiled A*, two cost models
+  ├─ Tile servers       3D terrain tiles, HiRISE photo tiles
+  ├─ ARIA               rule-based assistant (no language model)
+  ├─ Reference layers   minerals, geology, Curiosity path, science cards
+  └─ SQLite             data/plans.db (saved plans, API only)
 ```
 
-Methods: `forward(lon, lat) → (x, y)`, `inverse(x, y) → (lon, lat)`,
-`scale_error_at(y)`.
+## The data on disk
 
-**`haversine_m(lon1, lat1, lon2, lat2)`** — Mars-sphere great-circle distance.
+Everything lives in `data/`, which we download from Hugging Face with
+`python scripts/download_data.py`. It isn't in Git.
 
----
+| File | What it is |
+|------|------------|
+| `hirise_gale/analysis.npz` | The 5 m grid: elevation, Horn slope, and masks for USGS/MOLA-filled cells |
+| `hirise_gale/metadata.json` | Source tiles, CRS, coverage stats, gap-fill details, checksums |
+| `hirise_gale/ortho_mosaic.tif` | HiRISE photo mosaic, 1 m/px (optional `ortho_mosaic_50cm.tif`) |
+| `hirise_gale/*.png` | Hillshade, elevation and slope overlays |
+| `terrain_context.npz` | MOLA heights for the globe outside the study area |
+| `minerals/aqueous_minerals.json` | 2,417 mineral detection sites |
+| `usgs_geologic_units.geojson`, `curiosity_official_route.geojson`, `hazard_zones.geojson` | Reference overlays |
+| `synthetic_demo/` | Generated test terrain, used by tests and as a fallback |
 
-### `app/terrain.py` — Terrain data loading
+The study window is 137.35–137.55°E, 4.75–4.45°S, about 11.8 km × 17.8 km. The grid is
+2,364 × 3,558 cells in a local equidistant cylindrical projection centred on 137.45°E, 4.6°S,
+on the Mars sphere (R = 3,396,190 m), with planetocentric latitude and east-positive longitude.
 
-**`Grid(x_min, y_max, cell, width, height)`** — dataclass  
-Converts between (row, col) and (x, y) in local eqc metres.
+## Backend (`app/`)
 
-**`TerrainDataset(folder)`** — reads `metadata.json` and `analysis.npz`.  
-Key methods:
-- `valid_mask()` — boolean array; True where elevation and slope are finite
-- `lookup(x, y)` — returns elevation, slope, passability at a point
-- `stats()` — coverage fraction, elevation range, slope p95
-- `to_lonlat(x, y)` / `from_lonlat(lon, lat)` — coordinate conversion
+| Module | What it does |
+|--------|--------------|
+| `main.py` | FastAPI app: loads datasets at startup, defines every endpoint |
+| `geo.py` | Mars sphere, local projection, great-circle distances |
+| `terrain.py` | Loads the grid; lookups by position; Horn (1981) slope |
+| `routing.py` | A* search, cost models, route metrics, route comparison |
+| `terrain_tiles.py` | 65×65 height tiles for the 3D globe (5 m grid inside, MOLA outside, blended at the edge) |
+| `ortho_tiles.py` | 256 px HiRISE photo tiles cut on demand from the mosaic, with an in-memory cache |
+| `assistant.py`, `aria_nlu.py`, `aria_templates.py`, `aria_places.py` | ARIA: understanding, answers, wording, place names |
+| `context.py` | Point context: geologic unit, nearest minerals and clays, dunes, data source |
+| `weather_facts.py` | Published temperature and radiation figures, each with its citation |
+| `science.py` | Science cards with references, and the older keyword Mission Guide |
+| `db.py` | SQLite plans and exports |
 
----
+### Routing
 
-### `app/routing.py` — A* path-finding
+The grid is 8-connected and diagonal moves can't cut corners. Cells steeper than the 15° limit,
+or without slope, are blocked. We run two cost models:
 
-**Horn slope** (Horn 1981):
-```
-slope_deg = atan(√(fx² + fy²)) · 180/π
-fx = [(z[r-1,c+1] + 2·z[r,c+1] + z[r+1,c+1]) − (z[r-1,c-1] + 2·z[r,c-1] + z[r+1,c-1])] / (8·cell)
-fy = [(z[r+1,c-1] + 2·z[r+1,c] + z[r+1,c+1]) − (z[r-1,c-1] + 2·z[r-1,c] + z[r-1,c+1])] / (8·cell)
-```
-Center cell is NOT used. Border and NoData-adjacent cells → NaN (impassable).
+- **shortest**: cost = step length;
+- **terrain**: cost = step length × (1 + 4 × (slope / 15°)²) + 2 × metres climbed + 0.5 × metres
+  descended.
 
-**A\* grid**:
-- 8-connected; step costs are Euclidean cell distances (1.0 or √2 for diagonals)
-- Diagonal steps blocked when either orthogonal neighbour is impassable
-  (no corner-cutting)
-- Heuristic: Euclidean distance to goal (admissible)
+The heuristic is the octile distance, plus the net climb or descent cost to the goal in terrain
+mode. It never overestimates, so routes are optimal for their cost model.
 
-**Cost models**:
-- `shortest` — cost = step length in metres
-- `terrain` — cost = step length × (1 + slope_weight × slope_fraction) + climb/descent weights
+To make long routes fast, we did four things:
 
-**`RouteParams`** (defaults):
+1. The search is compiled with numba. A pure-Python version stays as a fallback and as the
+   reference in tests.
+2. Walkable regions are labelled once, so a blocked endpoint snaps into reachable ground straight
+   away.
+3. Routes longer than 3 km first try the exact search with a budget. If that runs out, we route on
+   a coarse 20 m grid, then search again at 5 m inside a corridor around it. Each response says
+   whether the route came from the `exact` or the `corridor` search.
+4. Both cost models run in parallel.
 
-| Parameter | Default | Note |
-|-----------|---------|------|
-| `max_slope_deg` | 15° | Apollo EVA actual traverses (EPSC2024) |
-| `caution_slope_deg` | 10° | Warning threshold — MSL moderate slope threshold (NASA MSL Engineering User Guide) |
-| `slope_weight` | 4.0 | Penalty multiplier |
-| `climb_weight_per_m` | 2.0 | Extra cost per metre climbed |
-| `descent_weight_per_m` | 0.5 | Extra cost per metre descended |
+Two routes count as "equivalent" when they're within 2 cells (Hausdorff distance) and their
+lengths differ by less than 1%.
 
-**Route comparison**:
-- Hausdorff distance computed between route cell lists
-- Routes within 2 cells Hausdorff AND < 1% length difference → "equivalent"
-- Identical check prevents showing duplicate route visualisations
+### Main endpoints
 
----
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/health`, `GET /api/datasets`, `GET /api/datasets/{id}/metadata` | Status, datasets, full metadata |
+| `GET /api/datasets/{id}/provenance`, `/integrity` | Source files and checksum checks |
+| `GET /api/datasets/{id}/layers/{name}` | Hillshade, elevation or slope PNG |
+| `GET /api/datasets/{id}/terrain`, `/terrain/{z}/{x}/{y}` | 3D terrain info and height tiles |
+| `GET /api/datasets/{id}/ortho`, `/ortho/{z}/{x}/{y}.png` | HiRISE photo info and tiles |
+| `GET /api/datasets/{id}/lookup` | Elevation, slope and source at a point |
+| `POST /api/route`, `POST /api/route/export/{fmt}` | Plan both routes; export as GeoJSON or a text briefing |
+| `GET /api/layers/minerals`, `/api/geology/units`, `/api/curiosity/route` | Reference layers |
+| `POST /api/assistant/chat` | Ask ARIA |
+| `GET /api/science/cards`, `POST /api/guide/query` | Science cards and the old Mission Guide |
+| `/api/plans/...` | Save, list, update, delete and export plans (not used by the current UI) |
 
-### `app/science.py` — Science cards and Mission Guide
+CORS is open (`*`) because this only runs locally.
 
-**Science cards** (`ScienceCard` NamedTuple):
-- card_id, site, lon, lat, coord_confidence, summary, detail, tags, sources, caveats
-- Coordinates from published landing site reports or peer-reviewed papers
-- Each card has explicit mineralogy ≠ life caveats
+### ARIA
 
-**Mission Guide** (`mission_guide_query`):
-- Rule list: `[(keywords, card_ids, response_text)]`
-- Returns matched cards, unmatched note if no match, and always includes:
-  `"Mission Guide is a rule-based lookup — NOT an AI."`
+ARIA doesn't use a language model. A question goes through three steps:
 
----
+1. **Understand** (`aria_nlu.py`): clean the text, expand short forms, fix typos against ARIA's
+   own vocabulary, then find topics (slope, temperature, route...), modifiers (day or night,
+   compass direction, comparison, "why") and place names. The chat sends the last few messages, so
+   follow-ups like "and at night?" use the previous topic.
+2. **Compute** (`assistant.py`): read the answer from our data. Slope at a point or in a 500 m
+   compass sector comes from the 5 m grid, route checks from the last route, minerals and
+   geology from the reference layers, and temperatures from `weather_facts.py`.
+3. **Word** (`aria_templates.py`): a direct answer, the reason with the real numbers, a tip,
+   then a `Source:` line. Replies that used no data, like a greeting or "I didn't understand",
+   carry no source.
 
-### `app/db.py` — Plan persistence
+## Frontend (`frontend/src/`)
 
-SQLite database at `data/plans.db`.
+| File | What it does |
+|------|--------------|
+| `App.tsx`, `App.css` | Layout: full-screen globe with glass panels on top |
+| `components/Globe.tsx` | Cesium viewer: terrain, basemaps, photo layer, routes, markers, info cards |
+| `components/MarsLabels.ts`, `labelStyle.ts` | One label style, and the declutter that keeps labels from overlapping |
+| `components/MineralPoints.ts` | Mineral detection points |
+| `components/ZoomAids.tsx` | HiRISE zoom stop, "max detail" chip, scale bar |
+| `components/RoutePanel.tsx` | Start and destination, picking, route results |
+| `components/ElevationChart.tsx`, `ResizablePanel.tsx` | Resizable elevation profile and exports |
+| `components/Inspector.tsx` | Hover bar: position, elevation, slope, data source |
+| `components/LayerControls.tsx` | Layer toggles |
+| `components/Chatbot.tsx` | ARIA chat panel |
+| `store/*.ts` | Zustand stores |
+| `api/cosmic.ts` | Every backend call |
+| `mapFrame.ts`, `mars.ts` | Centring views on the uncovered map area; the Mars sphere and place names |
 
-Schema:
-```sql
-CREATE TABLE plans (
-    id          TEXT PRIMARY KEY,  -- UUID
-    name        TEXT NOT NULL,
-    dataset_id  TEXT NOT NULL,
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL,
-    start_lon   REAL,
-    start_lat   REAL,
-    end_lon     REAL,
-    end_lat     REAL,
-    route_mode  TEXT,
-    route_data  TEXT,  -- JSON
-    params      TEXT,  -- JSON
-    notes       TEXT
-);
-```
+The old OpenLayers page is kept in `frontend/legacy/` and `frontend/static/ol/` for reference. The
+backend still serves `/static`, and one test checks it.
 
-Exports: `export_geojson(plan)` → GeoJSON FeatureCollection,
-`export_briefing(plan, meta)` → plain-text mission brief.
+## Tests (`tests/`)
 
----
+| File | Covers |
+|------|--------|
+| `test_core.py` | Geometry, terrain, slope, routing rules and metrics on synthetic grids |
+| `test_routing_speed.py` | Compiled A* against the Python reference, corridor search, long-route speed |
+| `test_api.py` | Every endpoint against the real and synthetic datasets |
+| `test_assistant.py`, `test_aria_offline.py` | ARIA: wording, follow-ups, place names, sources, no invented numbers |
+| `test_ortho.py` | HiRISE photo tile depth, sharper-mosaic fallback, cache headers |
 
-### `app/main.py` — FastAPI application
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Serve `frontend/index.html` |
-| `/static/*` | GET | Serve OpenLayers and static assets |
-| `/api/health` | GET | Health check |
-| `/api/datasets` | GET | List loaded datasets |
-| `/api/datasets/{id}/metadata` | GET | Full metadata.json |
-| `/api/datasets/{id}/provenance` | GET | Provenance and checksums |
-| `/api/datasets/{id}/integrity` | GET | SHA-256 integrity checks |
-| `/api/datasets/{id}/layers/{name}` | GET | PNG layer (hillshade/elevation/slope/thumbnail) |
-| `/api/datasets/{id}/lookup` | GET | Terrain lookup by lon/lat |
-| `/api/route` | POST | Compute A* route |
-| `/api/science/cards` | GET | All science cards |
-| `/api/science/cards/{id}` | GET | Single card |
-| `/api/guide/query` | POST | Mission Guide query |
-| `/api/plans` | GET / POST | List / create plans |
-| `/api/plans/{id}` | GET / PATCH / DELETE | CRUD |
-| `/api/plans/{id}/export/geojson` | GET | Export GeoJSON |
-| `/api/plans/{id}/export/briefing` | GET | Export plain text |
-
-CORS is set to `allow_origins=["*"]` for local development.
-
----
-
-## Frontend (Vanilla JS + OpenLayers 10.11.0)
-
-Single HTML file: `frontend/index.html`  
-No build step. No Node.js. No npm.
-
-**Map**: `ol.layer.Image` with `ol.source.ImageStatic` loads a PNG layer from
-the backend. The projection is a custom `MARS-EQC` registered with OpenLayers,
-with extent = grid extent in local eqc metres.
-
-**Route rendering**: Two `ol.layer.Vector` layers:
-- Blue dashed line = shortest route
-- Orange solid line = terrain-weighted route
-
-**Coordinate conversion** in the browser uses the local eqc formula directly
-(no PROJ, no server round-trip):
-```js
-const lon = crs.lon0 + (x / (R * Math.cos(lat0r))) * 180 / Math.PI;
-const lat = crs.lat0 + (y / R) * 180 / Math.PI;
-```
-
-**Offline capability**: After initial load, all data comes from localhost.
-No external requests are made at runtime.
-
----
-
-## Data Flow
-
-```
-User clicks map
-  → JS converts pixel → local eqc (x, y)
-  → inverse formula → (lon, lat)
-  → filled into form fields
-  → user clicks Compute Route
-  → POST /api/route { dataset_id, start, destination, mode, params }
-  → backend: forward lon/lat → local eqc (x, y)
-  → nearest_passable() snaps to grid
-  → passable_mask() builds boolean array
-  → _astar() runs A* → cell list
-  → route_metrics() computes stats + xy + lonlat + profiles
-  → JSON response
-  → JS draws LineString features on OL vector layers
-  → canvas profile chart drawn
-```
-
----
-
-## Offline Architecture
-
-```
-internet ───✗───  (blocked at runtime)
-
-disk
-├── frontend/static/ol/ol.js       OpenLayers, bundled
-├── data/synthetic_demo/           synthetic terrain PNGs
-│   elevation.png, slope.png, hillshade.png
-│   analysis.npz (elevation + slope arrays)
-└── data/plans.db                  SQLite, local plans
-
-browser ←──HTTP──→ uvicorn (127.0.0.1:8000)
-```
-
-The app works with no internet once installed, provided the synthetic demo
-terrain has been generated.
-
----
-
-## Test Coverage
-
-52 unit tests in `tests/test_core.py` cover:
-- `geo.py`: LocalEqc, haversine, validate_lonlat, wrap180
-- `terrain.py`: Grid, TerrainDataset, Horn slope (flat, gradient, NoData, border)
-- `routing.py`: passable_mask, classify_cell, A*, route_metrics, compare_routes,
-  explain_tradeoff, rasterize_polygons, RouteParams
-
-Tests use an in-memory synthetic dataset (`_make_synthetic_ds`) with a known
-2° N-S slope plane so assertions can be exact.
+Run them with `python -m pytest`. There are 197 tests; with the data downloaded, they all run.

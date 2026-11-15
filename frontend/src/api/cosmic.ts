@@ -280,10 +280,15 @@ export interface OrthoInfo {
   /** Mosaic build tag; part of the tile URLs so rebuilt mosaics bypass the browser cache. */
   version?: string
   west?: number; south?: number; east?: number; north?: number
+  /** Native pixel size of the served mosaic (1 m, or 0.5 / 0.25 m when the RED_A mosaic is built). */
   resolution_m?: number
   max_level?: number
   credit?: string
   note?: string | null
+  /** Present when a finer mosaic is served: the 1 m mosaic that fills its gaps. */
+  fallback?: { file: string; resolution_m: number }
+  /** Where the finer mosaic has data ('1') vs the fallback ('0'); rows north → south. */
+  detail_grid?: { cols: number; rows: number; cells: string[] }
 }
 
 export const getOrthoInfo = (datasetId: string) =>

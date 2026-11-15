@@ -12,6 +12,12 @@ the request, so zoomed-out tiles stay cheap. Pixel value 0 is the image's no-dat
 and becomes transparent; the rest gets one tone curve for the whole image.
 
 Tiles are rendered on demand and kept in an in-memory LRU cache.
+
+Sharper mosaic + fallback: when a finer mosaic (e.g. 0.5 m from the full-resolution RED_A
+orthos) is served, the default 1 m mosaic can be given as `fallback`. Tiles are cut from the
+fine mosaic and any pixel it does not cover is filled from the fallback, so a partially built
+or partially downloaded fine mosaic never leaves holes. `detail_grid()` tells the client which
+parts are at the fine resolution (for the zoom limit and the "max detail" chip).
 """
 from __future__ import annotations
 
@@ -60,11 +66,20 @@ def _erode(valid: np.ndarray) -> np.ndarray:
     return out
 
 
+def _average():
+    from rasterio.enums import Resampling
+    return Resampling.average
+
+
 EMPTY_PNG = _png(np.zeros((TILE, TILE), np.uint8), np.zeros((TILE, TILE), np.uint8))
 
 
+DETAIL_GRID = (48, 72)   # columns × rows of the coverage grid sent to the client (~250 m cells)
+
+
 class OrthoTiler:
-    def __init__(self, path: Path, credit: str = "NASA/JPL-Caltech/UArizona", cache_size: int = 2048):
+    def __init__(self, path: Path, credit: str = "NASA/JPL-Caltech/UArizona", cache_size: int = 2048,
+                 fallback: "OrthoTiler | None" = None):
         import rasterio
         from pyproj import CRS, Transformer
 
@@ -95,6 +110,14 @@ class OrthoTiler:
             f = max(1, max(self.width, self.height) // 1024)
             thumb = src.read(1, out_shape=(max(1, self.height // f), max(1, self.width // f)))
             self.lut = _tone_lut(thumb)
+            sources = (src.tags().get("SOURCES") or "").strip()
+            self.tag_sources = [x for x in sources.split(",") if x]
+            # Coarse coverage grid (1 = this mosaic has data in the cell).
+            cols, rows = DETAIL_GRID
+            cov = src.read(1, out_shape=(rows, cols), resampling=_average())
+            self._grid = ["".join("1" if v > 0 else "0" for v in row) for row in cov]
+        self.sources: list[str] = list(self.tag_sources)
+        self.fallback = fallback
         self.px_lon = (self.east - self.west) / self.width    # degrees per source pixel
         self.px_lat = (self.north - self.south) / self.height
         # Deepest level whose tile pixels are still at least as fine as the source pixels.
@@ -110,7 +133,7 @@ class OrthoTiler:
         return src
 
     def info(self) -> dict:
-        return {
+        out = {
             "available": True,
             "file": self.path.name,
             "west": self.west, "south": self.south, "east": self.east, "north": self.north,
@@ -119,11 +142,35 @@ class OrthoTiler:
             "tile_size": TILE,
             "credit": self.credit,
         }
+        if self.fallback is not None:
+            out["fallback"] = {"file": self.fallback.path.name, "resolution_m": round(self.fallback.res_m, 3)}
+            out["detail_grid"] = self.detail_grid()
+        return out
+
+    def detail_grid(self) -> dict:
+        """Where the tiles are at `resolution_m` ('1') and where they come from the fallback ('0').
+        Rows run north → south, columns west → east, over this mosaic's bounds."""
+        cols, rows = DETAIL_GRID
+        return {"cols": cols, "rows": rows, "cells": self._grid}
 
     def tile(self, z: int, x: int, y: int) -> bytes:
         return self._cached(z, x, y)
 
     def _render(self, z: int, x: int, y: int) -> bytes:
+        arrays = self.arrays(z, x, y)
+        if self.fallback is not None and (arrays is None or (arrays[1] == 0).any()):
+            fb = self.fallback.arrays(z, x, y)
+            if fb is not None:
+                if arrays is None:
+                    arrays = fb
+                else:
+                    hole = arrays[1] == 0
+                    arrays[0][hole] = fb[0][hole]
+                    arrays[1][hole] = fb[1][hole]
+        return EMPTY_PNG if arrays is None else _png(*arrays)
+
+    def arrays(self, z: int, x: int, y: int) -> tuple[np.ndarray, np.ndarray] | None:
+        """Grey + alpha 256×256 arrays of one tile from this mosaic alone (None: nothing here)."""
         from rasterio.enums import Resampling
         from rasterio.windows import Window
 
@@ -131,7 +178,7 @@ class OrthoTiler:
         west, north = -180.0 + x * span, 90.0 - y * span
         east, south = west + span, north - span
         if east <= self.west or west >= self.east or north <= self.south or south >= self.north:
-            return EMPTY_PNG
+            return None
 
         # Tile edges in fractional source-pixel coordinates.
         c0 = (west - self.west) / self.px_lon
@@ -145,7 +192,7 @@ class OrthoTiler:
         dx0, dx1 = round((cc0 - c0) * sx), round((cc1 - c0) * sx)
         dy0, dy1 = round((rr0 - r0) * sy), round((rr1 - r0) * sy)
         if dx1 <= dx0 or dy1 <= dy0:
-            return EMPTY_PNG
+            return None
 
         data = self._src().read(
             1,
@@ -157,4 +204,4 @@ class OrthoTiler:
         alpha = np.zeros((TILE, TILE), np.uint8)
         gray[dy0:dy1, dx0:dx1] = self.lut[data]
         alpha[dy0:dy1, dx0:dx1] = np.where(_erode(data > 0), 255, 0)
-        return _png(gray, alpha)
+        return gray, alpha
