@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   BoundingSphere, Cartesian2, Cartesian3, Cartographic, Color, ConstantProperty, Credit, CustomHeightmapTerrainProvider,
-  DistanceDisplayCondition, EllipsoidTerrainProvider, GeographicTilingScheme, HeadingPitchRange,
-  ClassificationType, HorizontalOrigin, ImageMaterialProperty, Math as CesiumMath, PinBuilder,
+  DistanceDisplayCondition, EasingFunction, EllipsoidTerrainProvider, Entity as CesiumEntity, GeographicTilingScheme,
+  HeadingPitchRange, ClassificationType, ImageMaterialProperty, Math as CesiumMath, PinBuilder,
   PolygonHierarchy, PolylineDashMaterialProperty,
-  Rectangle, ScreenSpaceEventType, UrlTemplateImageryProvider, VerticalOrigin,
+  Rectangle, ScreenSpaceEventHandler as ScreenSpaceEventHandlerImpl, ScreenSpaceEventType, UrlTemplateImageryProvider,
+  VerticalOrigin,
   type ImageryLayer, type Viewer as CesiumViewer,
 } from 'cesium'
 import {
@@ -20,7 +21,8 @@ import { GALE, MARS, MARS_RADIUS, featureUrl, type MarsFeature } from '../mars'
 import { LANDING_SITES, type LandingSite } from '../data/landingSites'
 import { useLayerStore } from '../store/layerStore'
 import { useRouteStore } from '../store/routeStore'
-import { SITE_MAX_HEIGHT, useMarsLabels, type Reserved, type SiteLabel } from './MarsLabels'
+import { SITE_MAX_HEIGHT, useMarsLabels, type PointCategory, type PointLabel, type Reserved } from './MarsLabels'
+import { labelOptions, measureLabel } from '../labelStyle'
 import { useMineralPoints, type MineralPick } from './MineralPoints'
 import Inspector from './Inspector'
 import { fitToVisible, measureMapFrame, visibleTangents } from '../mapFrame'
@@ -86,8 +88,6 @@ const LANDING_ICON = (() => {
   g.beginPath(); g.arc(14, 14, 3, 0, Math.PI * 2); g.fill()
   return c.toDataURL()
 })()
-const LANDING_TEAL = Color.fromCssColorString('#5eead4')
-const LANDING_LABEL_OFFSET = new Cartesian2(14, 0)
 
 // Initial camera: lon, lat, altitude (m) — over Gale Crater, 50 km up.
 const START_VIEW = [137.4, -4.6, 50_000] as const
@@ -125,8 +125,6 @@ const ROUTE_STYLE = {
   shortest: { color: Color.fromCssColorString('#ff3b30'), width: 4 },
 } as const
 const FOOTPRINT_COLOR = Color.fromCssColorString('#4a9eff')
-const INK = Color.fromCssColorString('#e8f0ff')
-const HALO = Color.fromCssColorString('#0a0e1a')
 // Pins ignore depth only when close (so a 1–4 m overlay never hides them) but are still
 // hidden behind the planet at globe scale.
 const NEAR_NO_DEPTH = 400_000
@@ -134,8 +132,28 @@ const NEAR_NO_DEPTH = 400_000
 const LOCAL_ONLY = new DistanceDisplayCondition(0, SITE_MAX_HEIGHT)
 // Constant Cesium objects (inline `new …` in JSX would be re-applied on every render).
 const FOOTPRINT_LABEL_OFFSET = new Cartesian2(0, -4)
-const FOOTPRINT_LABEL_DDC = new DistanceDisplayCondition(0, 250_000)
 const GALE_LABEL_OFFSET = new Cartesian2(0, 18)
+// Shared label style (src/labelStyle.ts). These two stay entity labels; the Gale name is always
+// shown, but hidden when Gale is on the far side of the planet.
+const GALE_LABEL = { ...labelOptions('gale'), disableDepthTestDistance: NEAR_NO_DEPTH * 25 }
+const AREA_LABEL = { ...labelOptions('area'), disableDepthTestDistance: NEAR_NO_DEPTH }
+// Gale marker (40 px icon) + its name underneath: kept clear of other labels.
+const GALE_BOX = (() => {
+  const t = measureLabel('gale', 'Gale Crater')
+  const top = -20, bottom = GALE_LABEL_OFFSET.y + t.h
+  return { w: Math.max(44, t.w + 8), h: bottom - top, dy: (top + bottom) / 2 }
+})()
+// Camera moves: short and eased.
+const FLY = { duration: 1.3, easingFunction: EasingFunction.QUADRATIC_IN_OUT }
+const FLY_VIEW = { duration: 1.5, easingFunction: EasingFunction.QUADRATIC_IN_OUT }
+// Marker boxes (px around the anchor) that labels keep clear of.
+const MARKER = {
+  landing: { w: 18, h: 18, dy: 0 }, site: { w: 22, h: 30, dy: -15 },
+  waypoint: { w: 14, h: 14, dy: 0 }, mineral: { w: 12, h: 12, dy: 0 },
+} as const
+const MINERAL_LIFT_M = 60   // same lift as the mineral points (MineralPoints.ts)
+// What a hover / click can open (see onClick).
+const CLICKABLE = /^(gale-crater|landing:|curiosity-wp:|geo-unit:)/
 const ROUTE_DIM = { terrain: ROUTE_STYLE.terrain.color.withAlpha(0.85), shortest: ROUTE_STYLE.shortest.color.withAlpha(0.85) }
 // Router snaps endpoints to the nearest passable cell within 60 cells (app/routing.py).
 const SNAP_RADIUS_M = 300
@@ -145,10 +163,6 @@ const DEFAULT_MAX_SLOPE = 15
 // Dark gaps, not white: gold/white dashes vanish on the light-grey HiRISE hillshade.
 const CURIOSITY_GOLD = Color.fromCssColorString('#ffcc4d')
 const CURIOSITY_GAP = Color.fromCssColorString('#0a0e1a').withAlpha(0.85)
-const WAYPOINT_LABEL_OFFSET = new Cartesian2(10, 0)
-// 100 km: the study-area view sits at ~64 km now that the viewer box overhangs the window
-// (same on-screen scale as the earlier 40 km view), and the names should show there.
-const WAYPOINT_LABEL_DDC = new DistanceDisplayCondition(0, 100_000)
 // USGS geologic units: semi-transparent fills (eHt blue-grey, Htu brown).
 const GEO_UNIT_COLORS: Record<string, string> = { eHt: '#7f93ad', Htu: '#8b5a2b' }
 export const geoUnitColor = (p: GeologicUnitProps) => GEO_UNIT_COLORS[p.unit] ?? p.color ?? '#999999'
@@ -183,6 +197,26 @@ function useSurfaceHeights(viewer: CesiumViewer | undefined, points: Record<stri
   return heights
 }
 
+// ---------- render quality ----------
+// Measured on an Intel Iris Xe laptop, Edge at devicePixelRatio 1.5, camera rotating (settings switched
+// in one session; numbers vary by a few fps with tile loading):
+//   Gale study area: old settings (1×, no MSAA) ≈ 26 fps · full DPR + 4× MSAA ≈ 12 · 1.25× + 2× MSAA ≈ 26
+//   Whole Mars:      old settings ≈ 60 fps               · full DPR + 4× MSAA ≈ 21 · 1.25× + 2× MSAA ≈ 36
+// so rendering is capped at 1.25 device pixels per CSS pixel with 2× MSAA: sharper than before on
+// high-DPI screens, without dropping below the old frame rate in the study area. (On stronger GPUs
+// both can be raised.)
+const MAX_PIXEL_RATIO = 1.25
+const MSAA_SAMPLES = 2
+
+/** Render at the screen's devicePixelRatio, capped at MAX_PIXEL_RATIO. With the browser-recommended
+ *  resolution off, Cesium renders at devicePixelRatio × resolutionScale, so resolutionScale only
+ *  applies the cap (it must not be set to devicePixelRatio itself: that would render DPR² pixels). */
+function applyPixelRatio(v: CesiumViewer) {
+  const dpr = window.devicePixelRatio || 1
+  v.useBrowserRecommendedResolution = false
+  v.resolutionScale = Math.min(1, MAX_PIXEL_RATIO / dpr)
+}
+
 // The live viewer, so other components (ARIA) can ask where the map is centred.
 let activeViewer: CesiumViewer | undefined
 
@@ -210,7 +244,7 @@ export function centerMapOn(lon: number, lat: number): boolean {
   const range = hit ? Cartesian3.distance(cam.positionWC, hit) : 4000
   cam.flyToBoundingSphere(new BoundingSphere(Cartesian3.fromDegrees(lon, lat, h, MARS), 0), {
     offset: new HeadingPitchRange(cam.heading, Math.min(cam.pitch, -0.35), Math.min(Math.max(range, 1500), 60000)),
-    duration: 1.5,
+    ...FLY,
   })
   return true
 }
@@ -312,6 +346,13 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
     v.scene.globe.baseColor = Color.fromCssColorString('#16213f')
     v.scene.backgroundColor = Color.fromCssColorString('#0a0e1a')
     v.scene.globe.enableLighting = false
+    // Sharp rendering on high-DPI screens (see applyPixelRatio), tiles a little sharper than Cesium's
+    // default screen-space error (2), and smooth edges: MSAA where WebGL2 supports it, FXAA only as
+    // the fallback (FXAA also blurs label text slightly and adds nothing on top of MSAA).
+    applyPixelRatio(v)
+    v.scene.globe.maximumScreenSpaceError = 1.5
+    if (v.scene.msaaSupported) v.scene.msaaSamples = MSAA_SAMPLES
+    else v.scene.postProcessStages.fxaa.enabled = true
     // Pins/labels clamp to the terrain; terrain hides what is behind it.
     v.scene.globe.depthTestAgainstTerrain = true
     // Black space with Cesium's bundled star field; no Earth sky glow, sun flare or (Earth's) moon.
@@ -340,7 +381,8 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
   // ---------- map frame: viewer box centred on the area not covered by panels ----------
   useEffect(() => {
     if (!viewer) return
-    const update = () => { measureMapFrame(); if (!viewer.isDestroyed()) viewer.resize() }
+    // (devicePixelRatio changes when the window moves to another screen or the page is zoomed.)
+    const update = () => { measureMapFrame(); if (!viewer.isDestroyed()) { applyPixelRatio(viewer); viewer.resize() } }
     update()
     const ro = new ResizeObserver(update)
     for (const sel of ['.globe', '.sidebar', '.dock']) {
@@ -352,11 +394,11 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
   }, [viewer])
 
   const flyToGale = () => {
-    viewer?.camera.flyTo({ destination: fitToVisible(GALE_RECT), duration: 2 })
+    viewer?.camera.flyTo({ destination: fitToVisible(GALE_RECT), ...FLY })
     showCard('gale')
   }
   const flyToStudyArea = () => {
-    if (viewer && rect) viewer.camera.flyTo({ destination: fitToVisible(rect), duration: 1.5 })
+    if (viewer && rect) viewer.camera.flyTo({ destination: fitToVisible(rect), ...FLY })
   }
 
   // ---------- top-bar tabs: Gale study area / Whole Mars ----------
@@ -383,14 +425,14 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
     setView('mars')
     setPicking(null)
     closeCards()
-    flyAfterLayout('mars', v => v.camera.flyTo({ ...wholeMarsCamera(v), duration: 2.5 }))
+    flyAfterLayout('mars', v => v.camera.flyTo({ ...wholeMarsCamera(v), ...FLY_VIEW }))
   }
   const goStudyArea = () => {
     setView('study')
     closeCards()
     flyAfterLayout('study', v => {
-      if (rect) v.camera.flyTo({ destination: fitToVisible(rect), duration: 2.5 })
-      else v.camera.flyTo({ destination: Cartesian3.fromDegrees(...START_VIEW, MARS), duration: 2.5 })
+      if (rect) v.camera.flyTo({ destination: fitToVisible(rect), ...FLY_VIEW })
+      else v.camera.flyTo({ destination: Cartesian3.fromDegrees(...START_VIEW, MARS), ...FLY_VIEW })
     })
   }
 
@@ -422,7 +464,7 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
   useEffect(() => { if (orthoLayer) orthoLayer.show = layers.showOrtho }, [orthoLayer, layers.showOrtho])
   useEffect(() => { if (orthoLayer) orthoLayer.alpha = op.ortho }, [orthoLayer, op.ortho])
   const flyToOrtho = () => {
-    if (viewer && orthoRect) viewer.camera.flyTo({ destination: fitToVisible(orthoRect), duration: 1.5 })
+    if (viewer && orthoRect) viewer.camera.flyTo({ destination: fitToVisible(orthoRect), ...FLY })
   }
 
   // ---------- 3D terrain + vertical exaggeration ----------
@@ -450,18 +492,43 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
   const excludeLabel = useCallback(
     (f: MarsFeature) => f === GALE || (layers.showSites && siteNames.some(s => s.startsWith(f.n.toLowerCase()))),
     [siteNames, layers.showSites])
-  const siteLabels = useMemo<SiteLabel[]>(
-    () => sites.filter(isLonLat).map(s => ({ text: s.site, lon: s.lon, lat: s.lat })), [sites])
-  const reserved = useCallback((): Reserved[] => {
-    const out: Reserved[] = [{ lon: GALE.lon, lat: GALE.lat, w: 110, h: 54, dy: 8 }]
-    const pin = (lon: number, lat: number) =>
-      out.push({ lon, lat, w: 32, h: 42, dy: -21, maxHeight: SITE_MAX_HEIGHT })
-    for (const p of [start, end]) if (isLonLat(p)) pin(p.lon, p.lat)
-    if (layers.showSites) for (const s of siteLabels) pin(s.lon, s.lat)
+  // Marker names (landing sites, science sites, Curiosity waypoints, minerals): drawn beside their
+  // markers by the shared declutter, with the marker's pick id so clicking a name opens its card.
+  const pointLabels = useMemo<PointLabel[]>(() => {
+    const out: PointLabel[] = []
+    for (const s of LANDING_SITES) {
+      out.push({ key: `landing:${s.id}`, cat: 'landing', text: `${s.mission.split(' (')[0]} · ${s.year}`,
+                 lon: s.lon, lat: s.lat, pickId: { id: `landing:${s.id}` }, marker: MARKER.landing })
+    }
+    for (const s of sites) {
+      if (isLonLat(s)) out.push({ key: `site:${s.card_id}`, cat: 'site', text: s.site, lon: s.lon, lat: s.lat, marker: MARKER.site })
+    }
+    waypoints.forEach((w, i) => out.push({ key: `wp:${i}`, cat: 'waypoint', text: w.name, lon: w.lon, lat: w.lat,
+                                            pickId: { id: `curiosity-wp:${i}` }, marker: MARKER.waypoint }))
+    if (minerals?.available && minerals.points) {
+      const legend = new Map((minerals.legend ?? []).map(l => [l.class, l]))
+      const ref = terrain?.reference_height_m ?? 0
+      for (const [i, p] of minerals.points.entries()) {
+        const l = legend.get(p.c)
+        const label = l?.label ?? p.c
+        out.push({ key: `min:${i}`, cat: 'mineral', text: label.split(' (')[0], lon: p.lon, lat: p.lat,
+                   height: (p.h ?? ref) + MINERAL_LIFT_M, marker: MARKER.mineral,
+                   pickId: { mineral: p, label, color: l?.color ?? '#cccccc' } satisfies MineralPick })
+      }
+    }
     return out
-  }, [start, end, siteLabels, layers.showSites])
-  useMarsLabels(viewer, terrainKey, layers.showLabels, layers.showSites, siteLabels, excludeLabel, reserved,
-    op.labels, op.sites)
+  }, [sites, waypoints, minerals, terrain])
+  const labelVisible = useMemo<Record<PointCategory, boolean>>(() => ({
+    landing: view === 'mars', site: layers.showSites, waypoint: layers.showTraverse, mineral: layers.showMinerals,
+  }), [view, layers.showSites, layers.showTraverse, layers.showMinerals])
+  const reserved = useCallback((): Reserved[] => {
+    const out: Reserved[] = [{ lon: GALE.lon, lat: GALE.lat, ...GALE_BOX }]
+    for (const p of [start, end]) {
+      if (isLonLat(p)) out.push({ lon: p.lon, lat: p.lat, w: 32, h: 42, dy: -21, maxHeight: SITE_MAX_HEIGHT })
+    }
+    return out
+  }, [start, end])
+  useMarsLabels(viewer, terrainKey, layers.showLabels, labelVisible, pointLabels, excludeLabel, reserved)
   useMineralPoints(viewer, minerals, layers.showMinerals,
     terrain?.available ? layers.exaggeration : 1, terrain?.reference_height_m ?? 0, op.minerals)
   useEffect(() => { if (!layers.showMinerals) setMineralCard(null) }, [layers.showMinerals])
@@ -529,8 +596,6 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
   ], MARS), [georef])
   const dash = useMemo(() => new PolylineDashMaterialProperty({ color: FOOTPRINT_COLOR, dashLength: 14 }), [])
   useEffect(() => { dash.color = new ConstantProperty(fade(FOOTPRINT_COLOR, op.footprint)) }, [dash, op.footprint])
-  const footprintLabel = useMemo(
-    () => ({ fill: fade(FOOTPRINT_COLOR, op.footprint), halo: fade(HALO, op.footprint) }), [op.footprint])
   // Curiosity route (NASA reference): dashed gold line, white waypoint dots, gold names.
   const traverseStyle = useMemo(() => {
     const a = op.traverse
@@ -538,7 +603,7 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
       line: new PolylineDashMaterialProperty({
         color: fade(CURIOSITY_GOLD, a), gapColor: fade(CURIOSITY_GAP, a), dashLength: 20,
       }),
-      dot: fade(Color.WHITE, a), gold: fade(CURIOSITY_GOLD, a), halo: fade(HALO, a),
+      dot: fade(Color.WHITE, a), gold: fade(CURIOSITY_GOLD, a),
     }
   }, [op.traverse])
   // Planned routes: both drawn, the active one stronger.
@@ -566,6 +631,74 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
     return pts
   }, [start, end, georef, sites, waypoints])
   const hs = useSurfaceHeights(viewer, hsPoints, [terrainKey, layers.exaggeration])
+
+  // ---------- hover: pointer cursor + a slightly larger marker / name over anything clickable ----------
+  const [hoverClickable, setHoverClickable] = useState(false)
+  useEffect(() => {
+    if (!viewer) return
+    const handler = new ScreenSpaceEventHandlerImpl(viewer.scene.canvas)
+    let timer = 0
+    let at: Cartesian2 | undefined
+    let lit: { key: unknown; restore: () => void } | null = null
+    const clear = () => { lit?.restore(); lit = null }
+    const run = () => {
+      timer = 0
+      if (!at || viewer.isDestroyed()) return
+      const hit = viewer.scene.pick(at) as { id?: unknown; primitive?: Record<string, unknown> } | undefined
+      const id = hit?.id as ({ id?: unknown; mineral?: unknown } & Partial<CesiumEntity>) | undefined
+      const clickable = !!id && ((typeof id.id === 'string' && CLICKABLE.test(id.id)) || !!id.mineral)
+      setHoverClickable(clickable)
+      const key = clickable ? (id instanceof CesiumEntity ? id : hit?.primitive) : null
+      if (key === (lit?.key ?? null)) return
+      clear()
+      if (!key) return
+      if (key instanceof CesiumEntity) {
+        // Entity graphics are re-applied every frame, so change the entity property itself.
+        if (key.billboard) {
+          const b = key.billboard, old = b.scale
+          b.scale = new ConstantProperty(1.15)
+          lit = { key, restore: () => { b.scale = old } }
+        } else if (key.point) {
+          const pt = key.point, old = pt.pixelSize
+          pt.pixelSize = new ConstantProperty(12)
+          lit = { key, restore: () => { pt.pixelSize = old } }
+        }
+      } else {
+        const prim = key as { pixelSize?: number; scale?: number; isDestroyed?: () => boolean }
+        if (typeof prim.pixelSize === 'number') {           // mineral point
+          const old = prim.pixelSize
+          prim.pixelSize = old * 1.3
+          lit = { key, restore: () => { if (!prim.isDestroyed?.()) prim.pixelSize = old } }
+        } else if (typeof prim.scale === 'number') {        // a marker's name label
+          const old = prim.scale
+          prim.scale = old * 1.08
+          lit = { key, restore: () => { prim.scale = old } }
+        }
+      }
+    }
+    handler.setInputAction((m: { endPosition: Cartesian2 }) => {
+      at = Cartesian2.clone(m.endPosition, at)
+      if (!timer) timer = window.setTimeout(run, 60)          // ~16 picks/s at most
+    }, ScreenSpaceEventType.MOUSE_MOVE)
+    return () => { window.clearTimeout(timer); clear(); handler.destroy() }
+  }, [viewer])
+
+  // The cursor is set on the canvas itself (a style on the viewer's container doesn't reach it).
+  useEffect(() => {
+    if (viewer && !viewer.isDestroyed()) viewer.scene.canvas.style.cursor = picking ? 'crosshair' : hoverClickable ? 'pointer' : ''
+  }, [viewer, picking, hoverClickable])
+
+  // ---------- small loading indicator while map tiles stream in ----------
+  const [tilesLoading, setTilesLoading] = useState(false)
+  useEffect(() => {
+    if (!viewer) return
+    let t = 0
+    const off = viewer.scene.globe.tileLoadProgressEvent.addEventListener((queued: number) => {
+      if (queued > 0) { if (!t) t = window.setTimeout(() => setTilesLoading(true), 400) }
+      else { window.clearTimeout(t); t = 0; setTilesLoading(false) }
+    })
+    return () => { off(); window.clearTimeout(t) }
+  }, [viewer])
 
   const routes = response?.routes ?? {}
   return (
@@ -609,11 +742,8 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
         {georef && (
           <Entity name="Routable area label" show={showFootprint}
                   position={Cartesian3.fromDegrees((georef.west + georef.east) / 2, georef.north, hs.footprint ?? 0, MARS)}>
-            <LabelGraphics text="ROUTABLE AREA" font="600 11px 'Space Grotesk', sans-serif"
-                           fillColor={footprintLabel.fill} outlineColor={footprintLabel.halo} outlineWidth={3} style={2}
-                           verticalOrigin={VerticalOrigin.BOTTOM} pixelOffset={FOOTPRINT_LABEL_OFFSET}
-                           distanceDisplayCondition={FOOTPRINT_LABEL_DDC}
-                           disableDepthTestDistance={NEAR_NO_DEPTH} />
+            <LabelGraphics text="ROUTABLE AREA" {...AREA_LABEL}
+                           verticalOrigin={VerticalOrigin.BOTTOM} pixelOffset={FOOTPRINT_LABEL_OFFSET} />
           </Entity>
         )}
 
@@ -640,10 +770,6 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
                   position={Cartesian3.fromDegrees(w.lon, w.lat, hs[`wp:${i}`] ?? 0, MARS)}>
             <PointGraphics pixelSize={9} color={traverseStyle.dot} outlineColor={traverseStyle.gold} outlineWidth={2.5}
                            disableDepthTestDistance={NEAR_NO_DEPTH} distanceDisplayCondition={LOCAL_ONLY} />
-            <LabelGraphics text={w.name} font="600 11px 'Space Grotesk', sans-serif"
-                           fillColor={traverseStyle.gold} outlineColor={traverseStyle.halo} outlineWidth={3} style={2}
-                           horizontalOrigin={HorizontalOrigin.LEFT} pixelOffset={WAYPOINT_LABEL_OFFSET}
-                           distanceDisplayCondition={WAYPOINT_LABEL_DDC} disableDepthTestDistance={NEAR_NO_DEPTH} />
           </Entity>
         ))}
 
@@ -669,10 +795,8 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
         <Entity id="gale-crater" name="Gale Crater"
                 position={Cartesian3.fromDegrees(GALE.lon, GALE.lat, hs.gale ?? 0, MARS)}>
           <BillboardGraphics image={GALE_ICON} disableDepthTestDistance={NEAR_NO_DEPTH * 25} />
-          <LabelGraphics text="Gale Crater" font="700 14px 'Space Grotesk', sans-serif"
-                         fillColor={INK} outlineColor={HALO} outlineWidth={4} style={2}
-                         verticalOrigin={VerticalOrigin.TOP} pixelOffset={GALE_LABEL_OFFSET}
-                         disableDepthTestDistance={NEAR_NO_DEPTH * 25} />
+          <LabelGraphics text="Gale Crater" {...GALE_LABEL}
+                         verticalOrigin={VerticalOrigin.TOP} pixelOffset={GALE_LABEL_OFFSET} />
         </Entity>
 
         {/* Whole Mars view: NASA landing sites (approximate positions, src/data/landingSites.ts). */}
@@ -680,10 +804,6 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
           <Entity key={s.id} id={`landing:${s.id}`} name={s.mission} show={view === 'mars'}
                   position={Cartesian3.fromDegrees(s.lon, s.lat, hs[`land:${s.id}`] ?? 0, MARS)}>
             <BillboardGraphics image={LANDING_ICON} disableDepthTestDistance={NEAR_NO_DEPTH * 25} />
-            <LabelGraphics text={`${s.mission.split(' (')[0]} · ${s.year}`} font="600 12px 'Space Grotesk', sans-serif"
-                           fillColor={LANDING_TEAL} outlineColor={HALO} outlineWidth={3} style={2}
-                           horizontalOrigin={HorizontalOrigin.LEFT} pixelOffset={LANDING_LABEL_OFFSET}
-                           disableDepthTestDistance={NEAR_NO_DEPTH * 25} />
           </Entity>
         ))}
 
@@ -727,6 +847,11 @@ export default function Globe({ sites }: { sites: ScienceCard[] }) {
           <button className="glass-btn ghost" onClick={flyToOrtho}>HiRISE photo</button>
         )}
       </div>
+      {tilesLoading && (
+        <div className="map-loading glass" role="status" aria-live="polite">
+          <span className="spinner" aria-hidden="true" />Loading map tiles…
+        </div>
+      )}
       {picking && (
         <div className="pick-banner glass" data-occludes>
           Click inside the <b>routable area</b> to place <b>{picking === 'start' ? 'A' : 'B'}</b> · drag to explore

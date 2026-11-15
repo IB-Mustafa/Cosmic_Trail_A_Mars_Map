@@ -48,41 +48,76 @@ function badges(source: string): string[] {
 interface MoveMapAction { type: 'move_map'; lon: number; lat: number; label: string }
 
 // Panel size: dragged from the top-left corner (the panel is anchored bottom-right).
-const SIZE_KEY = 'cosmic-trail:aria-size'
-const MIN = { w: 300, h: 200 }
-const MAX = { w: 600, h: 500 }
-const DEFAULT_SIZE = { w: 380, h: 420 }
-const PANEL_BOTTOM = 344   // CSS .aria-panel bottom offset; the panel must also fit above it
+// Default ≈ 440 px × 60 % of the window height; drag up to 50 % of the window width × 85 % of its
+// height. It always stays inside the map area: right of the sidebar, above the ARIA button and below
+// the top-bar tabs, so on small windows it shrinks to fit. The dragged size is kept for this tab
+// (sessionStorage), not forever.
+const SIZE_KEY = 'cosmic-trail:aria-size:v2'
+const MIN = { w: 320, h: 260 }
+const DEFAULT_W = 440
+const DEFAULT_H_FRAC = 0.6
+const MAX_W_FRAC = 0.5
+const MAX_H_FRAC = 0.85
+const GAP = 16            // px kept from the sidebar and the window's right edge
+const ABOVE_DOCK = 92     // CSS .aria-panel bottom = dock height + this (room for the ARIA button)
+const BELOW_TOP = 64      // room for the top-bar view tabs
 type Size = { w: number; h: number }
 
-const clampSize = (sz: Size): Size => ({
-  w: Math.round(Math.min(MAX.w, Math.max(MIN.w, sz.w))),
-  h: Math.round(Math.min(MAX.h, Math.max(MIN.h, sz.h))),
-})
-
-function loadSize(): Size {
+function loadSize(): Size | null {
   try {
-    const v = JSON.parse(localStorage.getItem(SIZE_KEY) ?? 'null')
-    if (v && Number.isFinite(v.w) && Number.isFinite(v.h)) return clampSize(v)
+    const v = JSON.parse(sessionStorage.getItem(SIZE_KEY) ?? 'null')
+    if (v && Number.isFinite(v.w) && Number.isFinite(v.h)) return v
   } catch { /* storage unavailable: use the default */ }
-  return DEFAULT_SIZE
+  return null
 }
 
 function saveSize(sz: Size) {
-  try { localStorage.setItem(SIZE_KEY, JSON.stringify(sz)) } catch { /* ignore */ }
+  try { sessionStorage.setItem(SIZE_KEY, JSON.stringify(sz)) } catch { /* ignore */ }
 }
 
-/** Never let the panel run off the top or left of a small window. */
-function useViewportLimit() {
-  const get = () => ({ w: window.innerWidth - 32, h: window.innerHeight - PANEL_BOTTOM - 16 })
-  const [lim, setLim] = useState(get)
+/** Largest size the panel may take now, from the live layout (sidebar edge, dock top, window). */
+function measureLimits() {
+  const W = window.innerWidth, H = window.innerHeight
+  const side = document.querySelector('.sidebar')?.getBoundingClientRect()
+  const dock = document.querySelector('.dock')?.getBoundingClientRect()
+  const sideRight = side && side.width > 0 && side.right < W * 0.6 ? side.right : 0
+  const dockH = dock && dock.height > 0 ? Math.max(0, H - dock.top) : 0
+  const fitW = W - sideRight - 2 * GAP
+  // Normally the panel sits above the dock. Only when that leaves less than the minimum height (short
+  // windows) does it extend down over the dock, so the messages stay usable; never below GAP.
+  let bottom = dockH + ABOVE_DOCK
+  if (H - bottom - BELOW_TOP < MIN.h) bottom = Math.max(GAP, H - BELOW_TOP - MIN.h)
+  const fitH = H - bottom - BELOW_TOP
+  return {
+    max: { w: Math.max(0, Math.min(W * MAX_W_FRAC, fitW)), h: Math.max(0, Math.min(H * MAX_H_FRAC, fitH)) },
+    def: { w: DEFAULT_W, h: H * DEFAULT_H_FRAC },
+    bottom,
+  }
+}
+
+/** Re-measure on window resize and whenever the sidebar or the bottom dock changes size. */
+function usePanelLimits() {
+  const [lim, setLim] = useState(measureLimits)
   useEffect(() => {
-    const on = () => setLim(get())
+    let raf = 0
+    const on = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => setLim(measureLimits())) }
     window.addEventListener('resize', on)
-    return () => window.removeEventListener('resize', on)
+    const ro = new ResizeObserver(on)
+    for (const sel of ['.sidebar', '.dock']) {
+      const el = document.querySelector(sel)
+      if (el) ro.observe(el)
+    }
+    on()
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', on); ro.disconnect() }
   }, [])
   return lim
 }
+
+/** Clamp a size to [MIN, max], letting MIN give way when the window is too small. */
+const clampTo = (sz: Size, max: Size): Size => ({
+  w: Math.round(Math.min(max.w, Math.max(Math.min(MIN.w, max.w), sz.w))),
+  h: Math.round(Math.min(max.h, Math.max(Math.min(MIN.h, max.h), sz.h))),
+})
 
 const fmt = (lon: number, lat: number) =>
   `${Math.abs(lat).toFixed(3)}°${lat < 0 ? 'S' : 'N'}, ${Math.abs(lon).toFixed(3)}°${lon < 0 ? 'W' : 'E'}`
@@ -106,9 +141,11 @@ export default function Chatbot() {
       ? `🗺 Moved the map to ${a.label} (${fmt(a.lon, a.lat)}). My answers now use this point.`
       : "The map isn't ready yet, so I couldn't move it. Please try again in a moment." }])
   }
-  const [size, setSize] = useState<Size>(loadSize)
+  // null = not resized in this tab: follow the default (which tracks the window size).
+  const [size, setSize] = useState<Size | null>(loadSize)
   const drag = useRef<{ x: number; y: number; w: number; h: number } | null>(null)
-  const limit = useViewportLimit()
+  const limit = usePanelLimits()
+  const shown = clampTo(size ?? limit.def, limit.max)
 
   // Auto-scroll to the latest message (also when the panel opens or is resized).
   // Jump (not smooth-scroll) to the newest message right after the DOM updates: a smooth scroll, or one
@@ -116,33 +153,34 @@ export default function Chatbot() {
   useLayoutEffect(() => {
     const l = listRef.current
     if (l) l.scrollTop = l.scrollHeight
-  }, [msgs, busy, open, size])
+  }, [msgs, busy, open, shown.w, shown.h])
   useEffect(() => { if (open) inputRef.current?.focus() }, [open])
 
   const onResizeStart = (e: PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
     e.currentTarget.setPointerCapture(e.pointerId)
-    drag.current = { x: e.clientX, y: e.clientY, w: size.w, h: size.h }
+    drag.current = { x: e.clientX, y: e.clientY, w: shown.w, h: shown.h }
   }
   const onResizeMove = (e: PointerEvent<HTMLDivElement>) => {
     const d = drag.current
     if (!d) return
     // Dragging up/left grows the panel (it is anchored at the bottom-right).
-    setSize(clampSize({ w: d.w + (d.x - e.clientX), h: d.h + (d.y - e.clientY) }))
+    setSize(clampTo({ w: d.w + (d.x - e.clientX), h: d.h + (d.y - e.clientY) }, limit.max))
   }
   const onResizeEnd = useCallback(() => {
     if (!drag.current) return
     drag.current = null
-    setSize(sz => { saveSize(sz); return sz })
+    setSize(sz => { if (sz) saveSize(sz); return sz })
   }, [])
   const onResizeKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = e.shiftKey ? 50 : 20
     const delta = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key]
     if (!delta) return
     e.preventDefault()
-    setSize(sz => { const next = clampSize({ w: sz.w + delta[0], h: sz.h + delta[1] }); saveSize(next); return next })
+    const next = clampTo({ w: shown.w + delta[0], h: shown.h + delta[1] }, limit.max)
+    saveSize(next)
+    setSize(next)
   }
-  const shown = { w: Math.min(size.w, Math.max(MIN.w, limit.w)), h: Math.min(size.h, Math.max(MIN.h, limit.h)) }
 
   const send = async (text: string) => {
     const q = text.trim()
@@ -179,10 +217,10 @@ export default function Chatbot() {
       </button>
       {open && (
         <section id="aria-panel" className="aria-panel glass" data-occludes aria-label="ARIA assistant"
-                 style={{ '--aria-w': `${shown.w}px`, '--aria-h': `${shown.h}px` } as CSSProperties}>
+                 style={{ '--aria-w': `${shown.w}px`, '--aria-h': `${shown.h}px`, '--aria-bottom': `${Math.round(limit.bottom)}px` } as CSSProperties}>
           <div className="aria-resize" role="separator" aria-orientation="horizontal" tabIndex={0}
                aria-label="Resize ARIA panel (drag, or use arrow keys)" title="Drag to resize"
-               aria-valuemin={MIN.h} aria-valuemax={MAX.h} aria-valuenow={size.h}
+               aria-valuemin={Math.min(MIN.h, Math.round(limit.max.h))} aria-valuemax={Math.round(limit.max.h)} aria-valuenow={shown.h}
                onPointerDown={onResizeStart} onPointerMove={onResizeMove}
                onPointerUp={onResizeEnd} onPointerCancel={onResizeEnd} onKeyDown={onResizeKey}>⤡</div>
           <header>

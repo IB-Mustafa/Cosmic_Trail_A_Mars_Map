@@ -121,7 +121,7 @@ export default function RoutePanel() {
                   picking={picking === 'end'} onPick={() => setPicking(picking === 'end' ? null : 'end')}
                   message={pickMessage?.target === 'end' ? pickMessage : null} />
       <div className="row">
-        <button className="primary" onClick={findRoute} disabled={busy || !dataset}>{busy ? 'Routing…' : 'Find Route'}</button>
+        <button className="primary" onClick={findRoute} disabled={busy || !dataset}>{busy ? <><span className="spinner" aria-hidden="true" />Routing…</> : 'Find Route'}</button>
         <button className="secondary" onClick={reset}>Reset</button>
       </div>
       {error && <p className="error">{error}</p>}
